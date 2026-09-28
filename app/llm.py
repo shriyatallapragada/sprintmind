@@ -26,8 +26,9 @@ _THINK = re.compile(r"<think>.*?</think>", re.S)
 
 
 # gpt-oss likes typographic hyphens/spaces ("NW\u2011240"); they would break ticket tags and name matching.
+# It also writes citations as 【1】 instead of [1], which would bypass citation checking.
 _TYPOGRAPHIC = str.maketrans({"\u2010": "-", "\u2011": "-", "\u2012": "-", "\u2013": "-", "\u00a0": " ",
-                              "\u202f": " ", "\u2009": " "})
+                              "\u202f": " ", "\u2009": " ", "\u3010": "[", "\u3011": "]"})
 
 
 def extract_json(text: str) -> dict[str, Any]:
@@ -80,10 +81,13 @@ class GroqLLM:
     async def _call(self, model: str, messages: list[dict[str, str]], temperature: float, json_mode: bool) -> str:
         kwargs: dict[str, Any] = {"model": model, "messages": messages, "temperature": temperature,
                                   "max_completion_tokens": self.max_tokens}
+        if model.startswith("openai/gpt-oss"):
+            # Hidden reasoning tokens count against the completion cap; long extractions got truncated at "medium".
+            kwargs["reasoning_effort"] = "low"
         if json_mode:
             kwargs["response_format"] = {"type": "json_object"}
         resp = await self.client.chat.completions.create(**kwargs)
-        return _THINK.sub("", resp.choices[0].message.content or "").strip()
+        return _THINK.sub("", resp.choices[0].message.content or "").translate(_TYPOGRAPHIC).strip()
 
     async def _run(self, system: str, user: str, *, label: str, temperature: float, json_mode: bool) -> tuple[str, str]:
         messages = [{"role": "system", "content": system}, {"role": "user", "content": user}]

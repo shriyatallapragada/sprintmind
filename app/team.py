@@ -48,5 +48,9 @@ class Team:
     def member(self, person_id: str) -> dict[str, Any] | None:
         return next((m for m in self.members if m["id"] == person_id), None)
 
+    def is_manager(self, person_id: str | None) -> bool:
+        m = self.member(person_id) if person_id else None
+        return bool(m and m.get("access") == "manager")
+
     def roster_text(self) -> str:
         return "\n".join(f"- {m['name']} ({m['role']})" for m in self.members)

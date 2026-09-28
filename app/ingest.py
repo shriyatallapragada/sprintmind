@@ -14,13 +14,18 @@ import json
 import threading
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from .llm import LLM
 from .memory import MemoryService, slug
 from .team import Team
 
+if TYPE_CHECKING:
+    from .delivery import DeliveryService
+
 SOURCE_TYPES = {"standup", "meeting", "sop", "task_update", "retro", "incident", "note"}
+# Sources a person can't submit through /ingest (they are produced by SprintMind's own pipelines).
+INTERNAL_SOURCE_TYPES = {"dashboard", "feedback"}
 
 EXTRACT_SYSTEM = """You extract delivery facts for a scrum team's memory system.
 Return ONLY a JSON object with this shape:
@@ -46,7 +51,10 @@ Rules:
 - 'commitment' = something promised to a customer. 'blocker' = work that cannot proceed.
 - Resolve relative dates ("Friday", "tomorrow") against the document date.
 - For SOP documents emit one 'sop_step' per rule/step, owner null unless a role is named.
-- Do not invent owners, dates or statuses that are not in the text."""
+- Do not invent owners, dates or statuses that are not in the text.
+- 'due' only when the text states a date or deadline for that specific item. A sprint's end date is not a due date.
+- 'commitment' only for something promised to an external customer; internal sprint work is 'task'.
+- status 'done' only when the text says the ticket itself is finished, not when one step of it is."""
 
 
 def _fmt_date(dt: datetime) -> str:
@@ -90,12 +98,14 @@ class Registry:
 
 
 class Ingestor:
-    def __init__(self, memory: MemoryService, llm: LLM | None, team: Team, registry: Registry, sprint: str) -> None:
+    def __init__(self, memory: MemoryService, llm: LLM | None, team: Team, registry: Registry, sprint: str,
+                 delivery: "DeliveryService | None" = None) -> None:
         self.memory = memory
         self.llm = llm
         self.team = team
         self.registry = registry
         self.sprint = sprint
+        self.delivery = delivery
 
     async def extract(self, source_type: str, title: str, content: str, occurred_at: datetime) -> dict[str, Any]:
         if self.llm is None:
@@ -147,9 +157,10 @@ class Ingestor:
         sprint: str | None = None,
         document_id: str | None = None,
         extraction: dict[str, Any] | None = None,
+        meeting_id: str | None = None,
     ) -> dict[str, Any]:
         """`extraction` ({summary, items}) skips the LLM pass when the caller already extracted facts."""
-        if source_type not in SOURCE_TYPES:
+        if source_type not in SOURCE_TYPES | INTERNAL_SOURCE_TYPES:
             raise ValueError(f"source_type must be one of {sorted(SOURCE_TYPES)}")
         occurred_at = occurred_at or datetime.now(timezone.utc)
         if occurred_at.tzinfo is None:
@@ -179,10 +190,17 @@ class Ingestor:
         }
         raw_res = await self.memory.retain([raw], document_id=document_id, label=f"raw {source_type}: {title}")
 
-        # 2) atomic, tagged delivery facts
+        # 2) the ledger: statements become timestamped events that update tickets / commitments / actions
+        item_ids: list[str | None] = [None] * len(items)
+        if self.delivery is not None:
+            item_ids = await self.delivery.record_extraction(
+                source_type=source_type, title=title, document_id=document_id, occurred_at=occurred_at, items=items,
+                customer=cust_id, meeting_id=meeting_id)
+
+        # 3) atomic, tagged delivery facts (tagged with the ledger item they describe, for traceability)
         fact_items = []
-        for it in items:
-            tags = list(base_tags)
+        for it, item_id in zip(items, item_ids):
+            tags = list(base_tags) + ([f"item:{item_id}"] if item_id else [])
             if it.get("kind"):
                 tags.append(f"kind:{it['kind']}")
             owner = self.team.resolve_person(it.get("owner"))
@@ -212,7 +230,7 @@ class Ingestor:
                 "metadata": {k: str(v) for k, v in {
                     "document_id": document_id, "kind": it.get("kind"), "ticket": it.get("ticket"),
                     "owner": owner, "status": it.get("status"), "due": it.get("due"),
-                    "action_id": it.get("action_id"), "scrum_stage": it.get("scrum_stage"),
+                    "item_id": item_id, "scrum_stage": it.get("scrum_stage"),
                 }.items() if v},
             })
         facts_res = None
@@ -241,5 +259,6 @@ class Ingestor:
         return {
             **entry,
             "items": items,
+            "item_ids": item_ids,
             "retain": {"raw": raw_res, "facts": facts_res},
         }

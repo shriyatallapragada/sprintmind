@@ -6,3 +6,4 @@ __pycache__/
 data/.registry.json
 data/meetings/
 .DS_Store
+data/sprintmind.db*

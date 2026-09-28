@@ -18,6 +18,13 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from app.seed import load_documents  # noqa: E402
 
 
+def api_headers() -> dict[str, str]:
+    """Identify as a manager: a Bearer token in token mode (SPRINTMIND_TOKEN), else the demo-mode header."""
+    import os
+    token = os.environ.get("SPRINTMIND_TOKEN")
+    return {"Authorization": f"Bearer {token}"} if token else {"X-SprintMind-User": os.environ.get("SPRINTMIND_USER", "neha")}
+
+
 async def run_direct(include_demo: bool, reset: bool) -> None:
     from app.config import get_settings
     from app.main import build_services
@@ -30,6 +37,7 @@ async def run_direct(include_demo: bool, reset: bool) -> None:
             except Exception as exc:  # noqa: BLE001 - bank may not exist yet
                 print(f"reset skipped: {exc}")
             s.registry.clear()
+            s.delivery.ledger.reset()
         print("setup:", await s.memory.setup())
         for doc in load_documents(include_demo):
             t0 = time.perf_counter()
@@ -44,7 +52,7 @@ async def run_direct(include_demo: bool, reset: bool) -> None:
 def run_api(base: str, include_demo: bool, reset: bool) -> None:
     import httpx
 
-    with httpx.Client(base_url=base, timeout=600) as c:
+    with httpx.Client(base_url=base, timeout=600, headers=api_headers()) as c:
         if reset:
             print("reset:", c.post("/admin/reset").status_code)
         print("setup:", c.post("/admin/setup").json())

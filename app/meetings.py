@@ -6,20 +6,22 @@
                                                    │
           Ingestor: retain(summary + transcript) and retain(one tagged fact per action event)
                                                    │
-          MeetingStore (data/meetings/*.json): the action board. Every status change on an
-          action is retained again, so Hindsight sees the action move todo → in progress → done
-          and the manager radar / employee briefing pick it up without anyone re-typing it.
+          Every action becomes a ledger item (see delivery.py), next to tickets and customer
+          commitments. MeetingStore (data/meetings/*.json) keeps the transcript and summary; the
+          action board reads the ledger, so a status change, a PR merge or an approval moves the same
+          record and is retained in Hindsight as a new, timestamped memory.
 """
 from __future__ import annotations
 
-import hashlib
 import json
 import threading
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
 
+from .delivery import DeliveryService
 from .ingest import Ingestor
+from .ledger import ITEM_STATUSES
 from .llm import LLM
 from .memory import slug
 from .team import Team
@@ -43,7 +45,7 @@ SCRUM_STAGES = {
     "retro": "a process improvement for the retrospective",
     "follow_up": "a small admin follow-up (send an email, confirm scope, share a document)",
 }
-ACTION_STATUSES = ("todo", "in_progress", "blocked", "done", "dropped")
+ACTION_STATUSES = ITEM_STATUSES
 ACTION_KINDS = {"task", "commitment", "blocker", "risk", "follow_up"}
 
 MEETING_SYSTEM = """You turn a scrum team's meeting transcript into a summary and action events.
@@ -75,7 +77,8 @@ Rules:
 - One item per distinct action. Keep numbers, limits and ticket ids exactly as spoken.
 - 'commitment' = promised to a customer. 'blocker' = work that cannot proceed (status blocked, stage impediment).
 - Owner only when the words make it clear (named person volunteers, is asked, or is named in a recap). Otherwise null.
-- Resolve relative dates ("Friday", "next sync") with the calendar provided. Do not invent dates.
+- Resolve relative dates ("Friday", "next sync") with the calendar provided. Do not invent dates; a sprint's end is
+  not an item's due date unless the meeting says so.
 - status is 'todo' unless the meeting says work has already started, is blocked, or is finished.
 - Fix obvious speech-to-text errors in names using the roster, but never invent facts."""
 
@@ -153,8 +156,10 @@ class MeetingStore:
 
 class MeetingService:
     def __init__(self, ingestor: Ingestor, llm: LLM | None, transcriber: Transcriber | None, team: Team,
-                 store: MeetingStore, *, max_audio_mb: float, keep_audio: bool, chunk_chars: int = 10000) -> None:
+                 store: MeetingStore, *, max_audio_mb: float, keep_audio: bool, chunk_chars: int = 10000,
+                 delivery: DeliveryService) -> None:
         self.ingestor = ingestor
+        self.delivery = delivery
         self.memory = ingestor.memory
         self.llm = llm
         self.transcriber = transcriber
@@ -221,31 +226,19 @@ class MeetingService:
             return " ".join(summaries)
 
     # ----------------------------------------------------------------- pipeline
-    def _normalise_actions(self, items: list[dict[str, Any]], meeting_id: str) -> list[dict[str, Any]]:
-        prefix = hashlib.sha1(meeting_id.encode()).hexdigest()[:6]
-        actions, n = [], 0
+    @staticmethod
+    def _normalise_actions(items: list[dict[str, Any]]) -> None:
+        """Fill scrum defaults in place; the ledger turns each action into an item with a stable id."""
         for it in items:
             if it.get("kind") == "decision":
                 it["scrum_stage"] = None
                 continue
-            n += 1
             if it.get("kind") not in ACTION_KINDS:
                 it["kind"] = "task"
             if it.get("scrum_stage") not in SCRUM_STAGES:
                 it["scrum_stage"] = "impediment" if it["kind"] == "blocker" else "sprint_backlog"
             if it.get("status") not in ACTION_STATUSES:
                 it["status"] = "blocked" if it["kind"] == "blocker" else "todo"
-            it["action_id"] = f"{prefix}-{n:02d}"
-            owner_id = self.team.resolve_person(it.get("owner"))
-            actions.append({
-                "id": it["action_id"],
-                "meeting_id": meeting_id,
-                **{k: it.get(k) for k in ("kind", "scrum_stage", "ticket", "title", "owner", "status", "due",
-                                          "priority", "customer", "blocked_on", "detail")},
-                "owner_id": owner_id,
-                "history": [{"status": it["status"], "at": _now().isoformat(), "by": "meeting", "note": None}],
-            })
-        return actions
 
     async def process(
         self,
@@ -259,8 +252,13 @@ class MeetingService:
         transcription: dict[str, Any] | None = None,
         audio: bytes | None = None,
         audio_filename: str | None = None,
+        extraction: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
-        """Summarise a transcript, turn it into action events, retain everything, save the meeting."""
+        """Summarise a transcript, turn it into action events, retain everything, save the meeting.
+
+        `extraction` ({summary, decisions, open_questions, items}) skips the LLM summary, e.g. for a
+        structured import or the scripted demo; everything downstream is the same pipeline.
+        """
         if meeting_type not in MEETING_TYPES:
             raise ValueError(f"meeting_type must be one of {sorted(MEETING_TYPES)}")
         if not transcript.strip():
@@ -271,22 +269,27 @@ class MeetingService:
         source_type = MEETING_TYPES[meeting_type]
         meeting_id = f"{source_type}-{occurred_at.strftime('%Y-%m-%d-%H%M')}-{slug(title)[:50]}"
 
-        result = await self.summarise(transcript, title, meeting_type, occurred_at)
-        actions = self._normalise_actions(result["items"], meeting_id)
+        result = (await self.summarise(transcript, title, meeting_type, occurred_at) if extraction is None else
+                  {"summary": extraction.get("summary") or title, "decisions": extraction.get("decisions") or [],
+                   "open_questions": extraction.get("open_questions") or [], "items": list(extraction.get("items") or [])})
+        self._normalise_actions(result["items"])
+        actions = [it for it in result["items"] if it.get("kind") != "decision"]
 
         # Summary first, so Hindsight (and anyone reading the raw memory) sees the outcome before the noise.
         content = "\n".join([
             f"SUMMARY: {result['summary']}",
             *(["DECISIONS:", *(f"- {d}" for d in result["decisions"])] if result["decisions"] else []),
-            *(["ACTION EVENTS:", *(f"- [{a['scrum_stage']}] {a['title']} (owner: {a['owner'] or 'unassigned'}"
-                                   f"{', due ' + a['due'] if a['due'] else ''})" for a in actions)] if actions else []),
+            *(["ACTION EVENTS:", *(f"- [{a['scrum_stage']}] {a.get('title')} (owner: {a.get('owner') or 'unassigned'}"
+                                   f"{', due ' + a['due'] if a.get('due') else ''})" for a in actions)] if actions else []),
             "", "TRANSCRIPT:", transcript,
         ])
         ingest = await self.ingestor.ingest(
             source_type=source_type, title=title, content=content, occurred_at=occurred_at, customer=customer,
-            participants=participants, document_id=meeting_id,
+            participants=participants, document_id=meeting_id, meeting_id=meeting_id,
             extraction={"summary": result["summary"], "items": result["items"], "error": result.get("error")},
         )
+        action_ids = list(dict.fromkeys(i for i, it in zip(ingest["item_ids"], result["items"])
+                                        if i and it.get("kind") != "decision"))
 
         meeting = {
             "id": meeting_id,
@@ -299,7 +302,7 @@ class MeetingService:
             "summary": result["summary"],
             "decisions": result["decisions"],
             "open_questions": result["open_questions"],
-            "actions": actions,
+            "action_ids": action_ids,
             "transcript": transcript,
             "transcription": {k: v for k, v in (transcription or {}).items() if k not in ("segments", "text")} or None,
             "segments": (transcription or {}).get("segments") or [],
@@ -310,7 +313,7 @@ class MeetingService:
             "created_at": _now().isoformat(),
         }
         self.store.save(meeting)
-        return meeting
+        return self.hydrate(meeting)
 
     async def process_audio(self, audio: bytes, filename: str, *, language: str | None = None,
                             **meta: Any) -> dict[str, Any]:
@@ -319,69 +322,39 @@ class MeetingService:
                                   audio=audio, audio_filename=filename, **meta)
 
     # ----------------------------------------------------------- action board
-    def list_actions(self, *, status: str | None = None, owner: str | None = None, stage: str | None = None,
-                     meeting_id: str | None = None) -> list[dict[str, Any]]:
-        out = []
-        for m in self.store.list():
-            if meeting_id and m["id"] != meeting_id:
+    def hydrate(self, meeting: dict[str, Any], *, full: bool = False) -> dict[str, Any]:
+        """Attach the current state of the meeting's actions from the ledger."""
+        if "action_ids" not in meeting and meeting.get("actions"):
+            self._import_legacy(meeting)
+        actions = []
+        for aid in meeting.get("action_ids", []):
+            try:
+                actions.append(self.delivery.item_view(aid, full=full))
+            except KeyError:
                 continue
-            for a in m.get("actions", []):
-                if status and a["status"] != status:
-                    continue
-                if owner and a.get("owner_id") != owner:
-                    continue
-                if stage and a["scrum_stage"] != stage:
-                    continue
-                out.append({**a, "meeting_title": m["title"], "meeting_at": m["occurred_at"]})
-        return out
+        return {**meeting, "actions": actions}
 
-    def _find_action(self, action_id: str) -> tuple[dict[str, Any], dict[str, Any]]:
-        for m in self.store.list():
-            for a in m.get("actions", []):
-                if a["id"] == action_id:
-                    return m, a
-        raise KeyError(action_id)
-
-    async def update_action(self, action_id: str, *, status: str | None = None, owner: str | None = None,
-                            due: str | None = None, note: str | None = None,
-                            person_id: str | None = None) -> dict[str, Any]:
-        """Move an action through the sprint and retain the change so memory tracks its evolution."""
-        if status and status not in ACTION_STATUSES:
-            raise ValueError(f"status must be one of {ACTION_STATUSES}")
-        meeting, action = self._find_action(action_id)
-        if owner:
-            owner_id = self.team.resolve_person(owner)
-            if not owner_id:
-                raise ValueError(f"unknown owner {owner!r}")
-            action["owner_id"], action["owner"] = owner_id, self.team.member(owner_id)["name"]
-        if due:
-            action["due"] = due
-        if status:
-            action["status"] = status
-        by = (self.team.member(person_id) or {}).get("name") if person_id else None
-        action["history"].append({"status": action["status"], "at": _now().isoformat(), "by": by or "dashboard",
-                                  "note": note})
+    def _import_legacy(self, meeting: dict[str, Any]) -> None:
+        """Meetings saved before the ledger kept their actions inline; move them into the ledger once."""
+        ledger = self.delivery.ledger
+        ev, _ = ledger.add_event(dedup_key=f"legacy:{meeting['id']}", source=meeting.get("source_type", "meeting"),
+                                 kind="document.ingested", occurred_at=meeting["occurred_at"], title=meeting["title"],
+                                 source_ref=meeting["id"], payload={"document_title": meeting["title"], "legacy": True})
+        ids = []
+        for a in meeting.get("actions", []):
+            if not ledger.get_item(a["id"]):
+                ledger.create_item(item_id=a["id"], kind=a.get("kind") or "task", title=a.get("title") or "action",
+                                   event=ev, status=a.get("status") or "todo", meeting_id=meeting["id"],
+                                   **{k: a.get(k) for k in ("detail", "ticket", "customer", "owner_id", "owner", "due",
+                                                            "priority", "scrum_stage", "blocked_on")})
+            ids.append(a["id"])
+        meeting["action_ids"] = ids
+        meeting.pop("actions", None)
         self.store.save(meeting)
 
-        when = _now()
-        item = {**action, "kind": "status_update", "blocked_on": note if action["status"] == "blocked" else None}
-        text = self.ingestor.fact_sentence(
-            item, f"action {action_id} from {meeting['title']}, updated {when.strftime('%a %d %b %Y')}")
-        if note:
-            text += f" Update note{' from ' + by if by else ''}: {note}"
-        tags = {"source:task_update", f"sprint:{self.ingestor.sprint}", "kind:status_update",
-                f"scrum:{action['scrum_stage']}", f"action:{action_id}"}
-        if action.get("owner_id"):
-            tags.add(f"person:{action['owner_id']}")
-        if action.get("ticket"):
-            tags.add(f"ticket:{action['ticket'].upper()}")
-        if meeting.get("customer"):
-            tags.add(f"customer:{meeting['customer']}")
-        if action["status"] == "blocked":
-            tags.add("status:blocked")
-        retain = await self.memory.retain(
-            [{"content": text, "context": "task_update:action_status", "timestamp": when, "tags": sorted(tags),
-              "metadata": {"action_id": action_id, "meeting_id": meeting["id"], "status": action["status"]}}],
-            label=f"action {action_id} → {action['status']}",
-        )
-        return {"action": {**action, "meeting_title": meeting["title"]}, "memory": text, "retain": retain}
+    def get(self, meeting_id: str) -> dict[str, Any] | None:
+        m = self.store.get(meeting_id)
+        return self.hydrate(m) if m else None
+
+    def list(self) -> list[dict[str, Any]]:
+        return [self.hydrate(m) for m in self.store.list()]

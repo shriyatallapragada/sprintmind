@@ -41,6 +41,21 @@ class Settings(BaseSettings):
     meetings_dir: str = "data/meetings"
     keep_audio: bool = False
 
+    # --- Delivery ledger / GitHub ---------------------------------------------
+    ledger_path: str = "data/sprintmind.db"
+    ticket_prefixes: str = "NW"                     # project keys that link PRs / branches to tickets
+    ticket_url_template: str | None = None          # e.g. https://acme.atlassian.net/browse/{ticket}
+    github_repo: str = "northwind/platform"         # used for demo events and links
+    github_webhook_secret: str | None = None        # required to accept real webhooks
+    team_timezone: str = "Asia/Kolkata"             # due dates and business days are evaluated here
+
+    # --- Access control ---------------------------------------------------------
+    # "demo":  the caller is whoever the X-SprintMind-User header names (the UI's "Viewing as").
+    #          Convenient for demos, NOT secure.
+    # "token": callers must send `Authorization: Bearer <token>`; tokens map to people in API_TOKENS.
+    auth_mode: str = "demo"
+    api_tokens: str | None = None                   # "priya=<token>,neha=<token>"
+
     # --- Team / sprint context ---------------------------------------------
     team_name: str = "Northwind Platform Team"
     current_sprint: str = "14"

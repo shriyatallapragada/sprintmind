@@ -9,6 +9,8 @@ import textwrap
 
 import httpx
 
+from scripts.seed import api_headers
+
 QUESTION = "What were the key deliverables agreed with Acme Corp in yesterday's Teams sync, and who owns each one?"
 
 
@@ -18,7 +20,7 @@ def show(title: str, text: str) -> None:
 
 
 def main(base: str) -> None:
-    with httpx.Client(base_url=base, timeout=600) as c:
+    with httpx.Client(base_url=base, timeout=600, headers=api_headers()) as c:
         print("health:", c.get("/health").json())
 
         # Step 1 - the frustration: no memory
@@ -39,11 +41,17 @@ def main(base: str) -> None:
                                           "question": "What is my highest priority task today and what SOP should I follow?"}).json()
         show("STEP 3b  Developer view (Priya)", a["answer"])
 
-        radar = c.get("/manager/radar").json()
-        rep = radar["report"] or {}
-        show("STEP 3c  Manager radar (reflect)", f"health: {rep.get('health')}\n{rep.get('summary') or radar['narrative']}")
-        for b in rep.get("blocked", []):
-            print(f"  BLOCKED {b.get('ticket')} {b.get('title')} ({b.get('owner')}) waiting on {b.get('waiting_on')}")
+        dash = c.get("/manager/dashboard").json()
+        show("STEP 3c  Delivery radar (rule-based, evidence-backed)", f"{dash['summary']}")
+        for r in dash["risks"]:
+            print(f"  {r['severity'].upper():<6} {r['title']}: {r['explanation']}\n         next: {r['recommended_action']}")
+
+        # Step 4 - engineering reality: a commitment, a failing CI run, the alert, the fix
+        for step in ("commitment", "ci_failure", "fix", "close"):
+            out = c.post(f"/demo/delivery/{step}").json()
+            risks = [r for r in c.get("/manager/dashboard").json()["risks"] if r["item_id"] == out["commitment"]["id"]]
+            show(f"STEP 4  delivery demo: {step}",
+                 f"commitment status: {out['commitment']['status']}; open risks: " + (", ".join(f"{r['severity']} {r['rule']}" for r in risks) or "none"))
 
         ev = c.get("/inspector/events").json()
         print("\nInspector:", ev["stats"])

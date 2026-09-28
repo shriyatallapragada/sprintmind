@@ -1,0 +1,721 @@
+{
+  "run_at": "2026-09-28T18:19:40.777194+00:00",
+  "llm": true,
+  "model": "openai/gpt-oss-20b",
+  "backend": "local",
+  "summary": {
+    "cases": 25,
+    "case_errors": [],
+    "deterministic_checks": {
+      "passed": 47,
+      "total": 47
+    },
+    "factual_correctness": {
+      "passed": 14,
+      "total": 14
+    },
+    "temporal_correctness": {
+      "passed": 8,
+      "total": 8
+    },
+    "abstention": {
+      "passed": 3,
+      "total": 3
+    },
+    "citation_support": {
+      "passed": 14,
+      "total": 14
+    },
+    "invalid_citations_removed": 0
+  },
+  "results": [
+    {
+      "id": "hist-commitment",
+      "category": "historical_retrieval",
+      "checks": [
+        {
+          "check": "state",
+          "ok": true,
+          "detail": "owner_id='priya'"
+        },
+        {
+          "check": "state",
+          "ok": true,
+          "detail": "due='2026-09-30'"
+        }
+      ],
+      "answers": [
+        {
+          "question": "What did we commit to Acme for their sandbox, who owns it and when is it due?",
+          "answer": "**Answer**\n\nWe committed to Acme Corp a sandbox tenant that can handle **1,200 requests per minute** with **burst capacity of 200** and an **integer Retry-After** header.  \n- **Owner:** Priya Raman  \n- **Due date:** 2026-09-30  \n\n**Evidence**\n\n- [1] Current state record (verified 28 Sep 2026) shows the commitment NW-231 with the above specs, status in_progress, owner Priya Raman, due 2026-09-30, customer Acme Corp.  \n- [2] Meeting notes from 25 Sep 2026 confirm the same details.  \n\n**Notes**\n\n- No blockers or risks are recorded in the current evidence.",
+          "abstain_case": false,
+          "temporal": false,
+          "missing": [],
+          "forbidden": [],
+          "abstained": false,
+          "cited": 2,
+          "invalid_citations": [],
+          "unsupported_citations": [],
+          "correct": true,
+          "citation_supported": true
+        }
+      ],
+      "error": null
+    },
+    {
+      "id": "hist-planning-owner",
+      "category": "historical_retrieval",
+      "checks": [
+        {
+          "check": "state",
+          "ok": true,
+          "detail": "owner='Rahul Verma'"
+        }
+      ],
+      "answers": [
+        {
+          "question": "Who owns NW-236 and what is it?",
+          "answer": "**Owner:** Rahul Verma  \n**Ticket:** NW-236 - \u201cOkta SAML SSO for the Acme tenant\u201d - a task to enable Okta-based SAML single-sign-on for the Acme tenant.  \n\n- Current state (verified 28 Sep 2026) lists the ticket as *todo* with Rahul Verma as owner [1].  \n- The original planning entry from 14 Sep 2026 also records Rahul Verma as owner and the same description [2].  \n\nNo blockers or risks are recorded for this ticket.",
+          "abstain_case": false,
+          "temporal": false,
+          "missing": [],
+          "forbidden": [],
+          "abstained": false,
+          "cited": 2,
+          "invalid_citations": [],
+          "unsupported_citations": [],
+          "correct": true,
+          "citation_supported": true
+        }
+      ],
+      "error": null
+    },
+    {
+      "id": "hist-sop-citation",
+      "category": "citation_accuracy",
+      "checks": [],
+      "answers": [
+        {
+          "question": "According to our hotfix SOP, what is the canary step?",
+          "answer": "**Answer:**  \nThe hotfix SOP specifies that the canary step is to deploy the hotfix to a 10 % canary for 15 minutes before a full rollout.  \n\n- Deploy to 10 % canary for 15 minutes.  \n- Source: SOP-004 Hotfix Release Procedure, step \u201cHotfix canary\u201d [2].",
+          "abstain_case": false,
+          "temporal": false,
+          "missing": [],
+          "forbidden": [],
+          "abstained": false,
+          "cited": 1,
+          "invalid_citations": [],
+          "unsupported_citations": [],
+          "correct": true,
+          "citation_supported": true
+        }
+      ],
+      "error": null
+    },
+    {
+      "id": "override-jira-over-standup",
+      "category": "temporal_override",
+      "checks": [
+        {
+          "check": "state",
+          "ok": true,
+          "detail": "status='in_review'"
+        },
+        {
+          "check": "history",
+          "ok": true,
+          "detail": "applied values newest first: ['in_review', 'in_progress']"
+        }
+      ],
+      "answers": [
+        {
+          "question": "What is the current status of NW-244?",
+          "answer": "**Current status of NW-244 \u201cAudit export API\u201d:**  \n- **In review**[1][3]\n\n- Owner: Rahul Verma[1]  \n- No due date recorded[1]\n\n**Blockers / Risks:** None reported in the current evidence.",
+          "abstain_case": false,
+          "temporal": true,
+          "missing": [],
+          "forbidden": [],
+          "abstained": true,
+          "cited": 2,
+          "invalid_citations": [],
+          "unsupported_citations": [],
+          "correct": true,
+          "citation_supported": true
+        }
+      ],
+      "error": null
+    },
+    {
+      "id": "override-github-beats-meeting",
+      "category": "temporal_override",
+      "checks": [
+        {
+          "check": "state",
+          "ok": true,
+          "detail": "status='done'"
+        },
+        {
+          "check": "not_applied",
+          "ok": true,
+          "detail": "meeting is less authoritative than github (set 2026-09-27)"
+        }
+      ],
+      "answers": [
+        {
+          "question": "Is NW-236 SSO finished?",
+          "answer": "**NW-236 \u201cOkta SSO\u201d is finished.**  \n- GitHub marked the PR (#479) as merged on 2026-09-27, setting the ticket status to *done* [1][4].  \n- The meeting on 2026-09-28 that reported the ticket as *in progress* is less authoritative than the GitHub event and is overridden by the merge record.  \n\n**Blockers / Risks**  \n- None reported. The ticket is officially closed.",
+          "abstain_case": false,
+          "temporal": true,
+          "missing": [],
+          "forbidden": [],
+          "abstained": false,
+          "cited": 2,
+          "invalid_citations": [],
+          "unsupported_citations": [],
+          "correct": true,
+          "citation_supported": true
+        }
+      ],
+      "error": null
+    },
+    {
+      "id": "override-stale-late-arrival",
+      "category": "temporal_override",
+      "checks": [
+        {
+          "check": "state",
+          "ok": true,
+          "detail": "status='done'"
+        },
+        {
+          "check": "not_applied",
+          "ok": true,
+          "detail": "older than the current value (set by task_update on 2026-09-28)"
+        }
+      ],
+      "answers": [],
+      "error": null
+    },
+    {
+      "id": "blocker-created",
+      "category": "blockers",
+      "checks": [
+        {
+          "check": "state",
+          "ok": true,
+          "detail": "status='blocked'"
+        },
+        {
+          "check": "dependency",
+          "ok": true,
+          "detail": "[('approval', 'open')]"
+        },
+        {
+          "check": "risk",
+          "ok": true,
+          "detail": "[('pending_approval', 'medium', 'risk')]"
+        }
+      ],
+      "answers": [
+        {
+          "question": "What is blocking NW-240?",
+          "answer": "**Answer:**  \nNW-240 is blocked by Acme Corp\u2019s written approval of the maintenance window.  \n\n- Current state shows the ticket is \u201cblocked\u201d because the approval is still pending[1].  \n- The standup notes confirm the same blocker: \u201cblocked on: Acme's written approval of the maintenance window\u201d[2].  \n- The delivery risk record reiterates that the approval has not yet been recorded and recommends chasing Acme for it[3].  \n\n**Blocker:** Acme\u2019s written approval of the maintenance window.",
+          "abstain_case": false,
+          "temporal": false,
+          "missing": [],
+          "forbidden": [],
+          "abstained": false,
+          "cited": 3,
+          "invalid_citations": [],
+          "unsupported_citations": [],
+          "correct": true,
+          "citation_supported": true
+        }
+      ],
+      "error": null
+    },
+    {
+      "id": "blocker-resolved-by-approval",
+      "category": "customer_approvals",
+      "checks": [
+        {
+          "check": "dependency",
+          "ok": true,
+          "detail": "[('approval', 'resolved')]"
+        },
+        {
+          "check": "state",
+          "ok": true,
+          "detail": "status='todo'"
+        },
+        {
+          "check": "risk",
+          "ok": true,
+          "detail": "open: []"
+        }
+      ],
+      "answers": [
+        {
+          "question": "Is NW-240 still blocked on Acme's approval?",
+          "answer": "**Answer:**  \nNo - NW-240 is no longer blocked on Acme\u2019s approval. The written approval was recorded in the meeting on 25 Sep 2026 and the delivery risk was closed the same day.\n\n- Current state shows the approval dependency resolved on 25 Sep 2026[1].  \n- Approval evidence is documented in the meeting notes and decision record from 25 Sep 2026[3][5].  \n- The delivery risk \u201cWaiting on approval\u201d was marked resolved on 28 Sep 2026 after the meeting, confirming the approval is in place[7].  \n\n**Blockers / Risks:** None remaining for this ticket.",
+          "abstain_case": false,
+          "temporal": true,
+          "missing": [],
+          "forbidden": [],
+          "abstained": false,
+          "cited": 4,
+          "invalid_citations": [],
+          "unsupported_citations": [],
+          "correct": true,
+          "citation_supported": true
+        }
+      ],
+      "error": null
+    },
+    {
+      "id": "approval-pending-negation",
+      "category": "customer_approvals",
+      "checks": [
+        {
+          "check": "dependency",
+          "ok": true,
+          "detail": "[('approval', 'open')]"
+        },
+        {
+          "check": "state",
+          "ok": true,
+          "detail": "status='blocked'"
+        }
+      ],
+      "answers": [],
+      "error": null
+    },
+    {
+      "id": "approval-recorded-in-dashboard",
+      "category": "customer_approvals",
+      "checks": [
+        {
+          "check": "dependency",
+          "ok": true,
+          "detail": "[('approval', 'resolved')]"
+        },
+        {
+          "check": "events",
+          "ok": true,
+          "detail": "1 events"
+        },
+        {
+          "check": "risk",
+          "ok": true,
+          "detail": "open: []"
+        }
+      ],
+      "answers": [],
+      "error": null
+    },
+    {
+      "id": "dependency-between-tickets",
+      "category": "blockers",
+      "checks": [
+        {
+          "check": "dependency",
+          "ok": true,
+          "detail": "[('item', 'resolved')]"
+        },
+        {
+          "check": "state",
+          "ok": true,
+          "detail": "status='todo'"
+        },
+        {
+          "check": "risk",
+          "ok": true,
+          "detail": "open: []"
+        }
+      ],
+      "answers": [],
+      "error": null
+    },
+    {
+      "id": "deadline-change",
+      "category": "deadline_ownership",
+      "checks": [
+        {
+          "check": "state",
+          "ok": true,
+          "detail": "due='2026-10-06'"
+        },
+        {
+          "check": "history",
+          "ok": true,
+          "detail": "applied values newest first: ['2026-10-06', '2026-09-30']"
+        }
+      ],
+      "answers": [
+        {
+          "question": "When is the Acme audit export demo due now?",
+          "answer": "**Due date:** 2026-10-06 [1][5]\n\n- The latest verified state (meeting on 25 Sep 2026) moved the due date from 30 Sep to 6 Oct.  \n- No newer evidence contradicts this; the risk opened on 28 Sep was resolved after the follow-up call, confirming the new due date.  \n\n**Blockers / risks:** None currently recorded.",
+          "abstain_case": false,
+          "temporal": true,
+          "missing": [],
+          "forbidden": [],
+          "abstained": false,
+          "cited": 2,
+          "invalid_citations": [],
+          "unsupported_citations": [],
+          "correct": true,
+          "citation_supported": true
+        }
+      ],
+      "error": null
+    },
+    {
+      "id": "owner-change",
+      "category": "deadline_ownership",
+      "checks": [
+        {
+          "check": "state",
+          "ok": true,
+          "detail": "owner_id='rahul'"
+        },
+        {
+          "check": "history",
+          "ok": true,
+          "detail": "applied values newest first: ['Rahul Verma', 'Sara Kim']"
+        }
+      ],
+      "answers": [
+        {
+          "question": "Who owns adding actor IP and user agent to the Acme audit export API?",
+          "answer": "**Owner:** Rahul Verma[1][4]\n\n- The current delivery ledger shows the commitment \u201cAdd actor IP and user agent to the audit export API\u201d is owned by Rahul Verma[1].  \n- The dashboard update on 28 Sep 2026 confirms the ownership change from Sara Kim to Rahul Verma[4].  \n\n**Blockers/Risks:** None reported.",
+          "abstain_case": false,
+          "temporal": true,
+          "missing": [],
+          "forbidden": [],
+          "abstained": false,
+          "cited": 2,
+          "invalid_citations": [],
+          "unsupported_citations": [],
+          "correct": true,
+          "citation_supported": true
+        }
+      ],
+      "error": null
+    },
+    {
+      "id": "ci-failure-risk",
+      "category": "ci",
+      "checks": [
+        {
+          "check": "risk",
+          "ok": true,
+          "detail": "[('ci_failing', 'high', 'risk')]"
+        },
+        {
+          "check": "risk_evidence",
+          "ok": true,
+          "detail": "evidence sources: ['github', 'meeting']"
+        }
+      ],
+      "answers": [
+        {
+          "question": "Is the Acme sandbox commitment at risk? Why?",
+          "answer": "**Answer:**  \nYes - the Acme sandbox commitment is at risk. The CI pipeline for the linked work (PR #488) failed, creating a high-severity risk that the 1,200 req/min tenant will not be delivered on time. The risk was opened on 28 Sep 2026 and remains unresolved, with only two business days left until the due date of 30 Sep 2026.  \n\n**Key points**\n\n- **Risk status:** High-severity risk identified in the delivery ledger [4].  \n- **Root cause:** CI check \u201cci / test\u201d failed on PR #488 for NW-231 at 17:18 UTC on 28 Sep 2026 [4].  \n- **Impact:** The failure threatens the ability to meet the 1,200 req/min commitment for Acme Corp, which is due 30 Sep 2026 [1].  \n- **Owner:** Priya Raman is responsible for fixing the CI failure and re-running the pipeline before the due date [1][4].  \n\n**Blockers / next steps**\n\n- Priya must resolve the CI failure and re-run the pipeline.  \n- If the CI does not pass, the commitment may need to be renegotiated or delayed.",
+          "abstain_case": false,
+          "temporal": false,
+          "missing": [],
+          "forbidden": [],
+          "abstained": false,
+          "cited": 2,
+          "invalid_citations": [],
+          "unsupported_citations": [],
+          "correct": true,
+          "citation_supported": true
+        }
+      ],
+      "error": null
+    },
+    {
+      "id": "ci-recovery",
+      "category": "ci",
+      "checks": [
+        {
+          "check": "risk",
+          "ok": true,
+          "detail": "open: []"
+        },
+        {
+          "check": "risk_history",
+          "ok": true,
+          "detail": "['opened', 'resolved']"
+        }
+      ],
+      "answers": [
+        {
+          "question": "What is the latest CI state for the Acme sandbox work on NW-231?",
+          "answer": "**Latest CI state for the Acme sandbox work on NW-231:**  \nCI \u201cci / test\u201d has passed on branch nw-231-eval-change as of 2026-09-28 17:18 UTC[6].  \n\n- The earlier failure at 15:18 UTC was superseded by the subsequent success[5].  \n- The delivery risk opened for CI failure was closed once the test passed[8].  \n\n**Blockers / risks:** None currently recorded.",
+          "abstain_case": false,
+          "temporal": true,
+          "missing": [],
+          "forbidden": [],
+          "abstained": false,
+          "cited": 3,
+          "invalid_citations": [],
+          "unsupported_citations": [],
+          "correct": true,
+          "citation_supported": true
+        }
+      ],
+      "error": null
+    },
+    {
+      "id": "ci-webhook-dedup",
+      "category": "duplicates",
+      "checks": [
+        {
+          "check": "events",
+          "ok": true,
+          "detail": "1 events"
+        },
+        {
+          "check": "events",
+          "ok": true,
+          "detail": "1 events"
+        }
+      ],
+      "answers": [],
+      "error": null
+    },
+    {
+      "id": "duplicate-ingestion",
+      "category": "duplicates",
+      "checks": [
+        {
+          "check": "events",
+          "ok": true,
+          "detail": "1 events"
+        },
+        {
+          "check": "history",
+          "ok": true,
+          "detail": "applied values newest first: ['in_review']"
+        },
+        {
+          "check": "memories",
+          "ok": true,
+          "detail": "1 raw documents"
+        }
+      ],
+      "answers": [],
+      "error": null
+    },
+    {
+      "id": "conflict-standup-vs-github",
+      "category": "conflicts",
+      "checks": [
+        {
+          "check": "state",
+          "ok": true,
+          "detail": "status='in_review'"
+        },
+        {
+          "check": "risk",
+          "ok": true,
+          "detail": "[('conflicting_evidence', 'medium', 'risk')]"
+        }
+      ],
+      "answers": [
+        {
+          "question": "Is NW-252 done?",
+          "answer": "**Answer:**  \nNo, NW-252 is not yet marked as *done* in the current SprintMind ledger. The authoritative source (GitHub) shows the ticket in the *in_review* state as of 2026-09-28, and the risk record confirms a disagreement between the standup report and the GitHub status [1][4].\n\n**Key points**\n\n- GitHub set status to *in_review* on 2026-09-28, which is the most recent verified state [1][2].\n- The daily standup also reported the ticket as *done* on the same day, but standup data is considered less authoritative than GitHub for status decisions [4].\n- A medium-risk entry was opened to resolve the discrepancy and recommends confirming the correct status with owner Arjun Mehta [4].\n\n**Blockers / Risks**\n\n- **Status disagreement**: The ticket\u2019s true state is unclear until Arjun Mehta confirms whether the review is complete.  \n- **Potential delay**: If the review is not finished, the ticket will remain in *in_review* and any downstream work depending on its completion will be blocked.",
+          "abstain_case": false,
+          "temporal": true,
+          "missing": [],
+          "forbidden": [],
+          "abstained": false,
+          "cited": 3,
+          "invalid_citations": [],
+          "unsupported_citations": [],
+          "correct": true,
+          "citation_supported": true
+        }
+      ],
+      "error": null
+    },
+    {
+      "id": "missing-owner",
+      "category": "missing_information",
+      "checks": [
+        {
+          "check": "risk",
+          "ok": true,
+          "detail": "[('missing_owner', 'info', 'missing_info'), ('missing_due', 'info', 'missing_info')]"
+        },
+        {
+          "check": "no_real_risks",
+          "ok": true,
+          "detail": "0 open risks"
+        }
+      ],
+      "answers": [
+        {
+          "question": "Who owns sharing the audit export sample file with Acme compliance, and when is it due?",
+          "answer": "**Answer:**  \n- **Owner:** Not recorded in SprintMind.  \n- **Due date:** Not recorded in SprintMind.\n\n**Details & Evidence**\n\n- The latest verified state (CURRENT STATE) shows the commitment \u201cShare an audit export sample file with Acme compliance\u201d as *todo* with no owner or due date recorded [1].\n- The meeting notes from 25 Sep 2026 also list the same commitment with status *todo* and no owner or due date [2][3].\n\n**Blockers / Risks**\n\n- The missing owner and due date mean the task cannot be tracked or prioritized.  \n- Without a due date, it is unclear when Acme compliance expects the sample file, potentially delaying compliance verification.",
+          "abstain_case": true,
+          "temporal": false,
+          "missing": [],
+          "forbidden": [],
+          "abstained": true,
+          "cited": 3,
+          "invalid_citations": [],
+          "unsupported_citations": [],
+          "correct": true,
+          "citation_supported": null
+        }
+      ],
+      "error": null
+    },
+    {
+      "id": "missing-due",
+      "category": "missing_information",
+      "checks": [
+        {
+          "check": "state",
+          "ok": true,
+          "detail": "due=None"
+        }
+      ],
+      "answers": [
+        {
+          "question": "What is the due date for NW-252, the Grafana dashboard?",
+          "answer": "**Answer:**  \nNot recorded in SprintMind.\n\n**Details**\n\n- The latest verified state for ticket NW-252 shows status *todo* and owner *Arjun Mehta* but no due date is listed [1][2].  \n- No subsequent evidence provides a due date.  \n\n**Blockers / Risks**\n\n- Without a due date, planning and resource allocation for this task remain uncertain.  \n- Recommend adding a due date in the next planning meeting or via a Jira update.",
+          "abstain_case": true,
+          "temporal": false,
+          "missing": [],
+          "forbidden": [],
+          "abstained": true,
+          "cited": 2,
+          "invalid_citations": [],
+          "unsupported_citations": [],
+          "correct": true,
+          "citation_supported": null
+        }
+      ],
+      "error": null
+    },
+    {
+      "id": "unknown-customer",
+      "category": "missing_information",
+      "checks": [],
+      "answers": [
+        {
+          "question": "What did Globex Corporation ask for in their kickoff call?",
+          "answer": "Not recorded in SprintMind. No evidence exists regarding Globex Corporation\u2019s request in the kickoff call.",
+          "abstain_case": true,
+          "temporal": false,
+          "missing": [],
+          "forbidden": [],
+          "abstained": true,
+          "cited": 0,
+          "invalid_citations": [],
+          "unsupported_citations": [],
+          "correct": true,
+          "citation_supported": null
+        }
+      ],
+      "error": null
+    },
+    {
+      "id": "overdue",
+      "category": "deadline_ownership",
+      "checks": [
+        {
+          "check": "risk",
+          "ok": true,
+          "detail": "[('overdue', 'high', 'risk')]"
+        }
+      ],
+      "answers": [
+        {
+          "question": "Is the rollback plan for Acme late?",
+          "answer": "**Yes, the rollback plan for Acme is late.**  \n- The commitment was due 2026-09-24 and remains in *todo* status [1].  \n- A delivery risk was opened noting the plan is past due by 2 business days [4].  \n\n**Blockers/Risks**  \n- High-risk status due to delay; requires new deadline agreement with Acme and updated status.",
+          "abstain_case": false,
+          "temporal": false,
+          "missing": [],
+          "forbidden": [],
+          "abstained": false,
+          "cited": 2,
+          "invalid_citations": [],
+          "unsupported_citations": [],
+          "correct": true,
+          "citation_supported": true
+        }
+      ],
+      "error": null
+    },
+    {
+      "id": "stale-progress",
+      "category": "deadline_ownership",
+      "checks": [
+        {
+          "check": "risk",
+          "ok": true,
+          "detail": "[('stale_progress', 'medium', 'risk')]"
+        }
+      ],
+      "answers": [],
+      "error": null
+    },
+    {
+      "id": "correction-overrides",
+      "category": "corrections",
+      "checks": [
+        {
+          "check": "state",
+          "ok": true,
+          "detail": "status='done'"
+        },
+        {
+          "check": "state",
+          "ok": true,
+          "detail": "status_source='feedback'"
+        }
+      ],
+      "answers": [
+        {
+          "question": "What is the status of NW-231?",
+          "answer": "**NW-231 \u201cRate limiting\u201d is currently marked as *done*.**  \n- The latest verified state shows the ticket as finished [1].  \n- Priya Raman\u2019s correction on 28 Sep 2026 confirms the ticket was merged to main yesterday, superseding earlier conflicting reports [4].\n\n**Blockers / Risks**  \n- None reported in the current evidence.",
+          "abstain_case": false,
+          "temporal": true,
+          "missing": [],
+          "forbidden": [],
+          "abstained": false,
+          "cited": 2,
+          "invalid_citations": [],
+          "unsupported_citations": [],
+          "correct": true,
+          "citation_supported": true
+        }
+      ],
+      "error": null
+    },
+    {
+      "id": "private-interactions",
+      "category": "access_control",
+      "checks": [
+        {
+          "check": "visible",
+          "ok": true,
+          "detail": "visible=False"
+        },
+        {
+          "check": "visible",
+          "ok": true,
+          "detail": "visible=True"
+        }
+      ],
+      "answers": [],
+      "error": null
+    }
+  ]
+}

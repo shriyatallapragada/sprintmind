@@ -43,6 +43,8 @@ const store = {
 
 async function api(path, { method = "GET", json, form } = {}) {
   const init = { method, headers: {} };
+  // Demo auth mode: the server trusts this header (see app/auth.py). Token mode would send a Bearer token instead.
+  if (S.person) init.headers["X-SprintMind-User"] = S.person;
   if (json !== undefined) { init.body = JSON.stringify(json); init.headers["Content-Type"] = "application/json"; }
   if (form) init.body = form;
   let r;
@@ -170,8 +172,9 @@ const typePill = (t) => `<span class="pill ${TYPE_TONE[t] || ""}">${esc(nice(t))
 function memList(facts, showScore = false) {
   return `<ol class="memlist">${facts.map((f, i) => `<li data-n="${i + 1}"><span class="n">${i + 1}</span><div>
     <div class="txt" title="Click to expand">${esc(f.text)}</div>
-    <div class="meta">${f.occurred_start ? `<span class="pill">${esc(fmtDate(f.occurred_start))}</span>` : ""}
-      ${f.type ? `<span class="pill ${f.type === "observation" ? "violet" : f.type === "experience" ? "teal" : ""}">${esc(f.type)}</span>` : ""}
+    <div class="meta">${f.occurred_start && f.type !== "current_state" ? `<span class="pill">${esc(fmtDate(f.occurred_start))}</span>` : ""}
+      ${f.type === "current_state" ? `<span class="pill green">current state · ledger</span>` : f.type ? `<span class="pill ${f.type === "observation" ? "violet" : f.type === "experience" ? "teal" : ""}">${esc(f.type)}</span>` : ""}
+      ${(f.tags || []).includes("kind:correction") ? `<span class="pill amber">correction</span>` : ""}
       ${showScore && f.score != null ? `<span class="pill blue">score ${Number(f.score).toFixed(2)}</span>` : ""}
       ${(f.tags || []).filter((t) => !t.startsWith("sprint:")).slice(0, 6).map((t) => `<span class="pill">${esc(t)}</span>`).join("")}</div>
   </div></li>`).join("")}</ol>`;
@@ -222,9 +225,25 @@ const S = {
   draft: { title: "", meeting_type: "customer_sync", customer: "", participants: "", when: "", tab: "rec", pasted: "" },
   prefill: null,
   events: [], lastEventId: 0, stats: null, inflight: new Map(), listeners: new Set(),
-  counts: { actions: 0, meetings: 0 },
+  counts: { actions: 0, meetings: 0, risks: 0 },
+  meetingIds: new Set(),
 };
 const me = () => S.team.members.find((m) => m.id === S.person) || null;
+const isManager = () => me()?.access === "manager";
+function setPerson(id) {
+  S.person = id; store.set("person", id);
+  $("#persona").value = id;
+  S.cache.briefing = {}; refreshCounts(); rerender();
+}
+function managerGate(el, what) {
+  if (isManager()) return false;
+  const mgr = S.team.members.find((m) => m.access === "manager");
+  el.innerHTML = `<div class="card">${emptyBox("users", `${what} is for managers`,
+    `You're viewing as ${me()?.name || "nobody"}. The server enforces this too: these endpoints return 403 for employees.`,
+    mgr ? `<button class="btn primary" id="switchMgr">View as ${esc(mgr.name)} (manager)</button>` : "")}</div>`;
+  $("#switchMgr", el)?.addEventListener("click", () => setPerson(mgr.id));
+  return true;
+}
 const member = (id) => S.team.members.find((m) => m.id === id);
 
 // =================================================================== router
@@ -236,13 +255,13 @@ const NAV = [
     { id: "meetings", label: "Meetings", icon: "mic", title: "Meetings", sub: "Record, transcribe and turn meetings into action events", render: viewMeetings, count: "meetings" },
   ] },
   { group: "Team", items: [
-    { id: "radar", label: "Sprint radar", icon: "radar", title: "Sprint radar", sub: "Sprint health synthesised by Hindsight reflect()", render: viewRadar },
+    { id: "radar", label: "Delivery radar", icon: "radar", title: "Delivery radar", sub: "Commitments at risk, with the evidence behind every alert", render: viewRadar, count: "risks" },
     { id: "sops", label: "SOP vault", icon: "book", title: "SOP vault", sub: "The team's standard operating procedures", render: viewSops },
   ] },
   { group: "Memory", items: [
     { id: "sources", label: "Sources", icon: "file", title: "Sources", sub: "Everything SprintMind has been told", render: viewSources },
     { id: "inspector", label: "Memory inspector", icon: "activity", title: "Memory inspector", sub: "Every retain, recall and reflect, live", render: viewInspector },
-    { id: "demo", label: "Before / after", icon: "split", title: "Before / after demo", sub: "The same question with and without memory", render: viewDemo },
+    { id: "demo", label: "Demo", icon: "split", title: "Demo", sub: "Commitment → GitHub event → risk → resolution, and memory before / after", render: viewDemo },
   ] },
   { group: "System", items: [
     { id: "settings", label: "Settings", icon: "settings", title: "Settings", sub: "Memory bank, dataset and appearance", render: viewSettings },
@@ -260,9 +279,12 @@ function updateCounts() {
 }
 async function refreshCounts() {
   try {
-    const [a, m] = await Promise.all([api("/actions"), api("/meetings")]);
+    const [a, m, r] = await Promise.all([api("/actions"), api("/meetings"),
+      isManager() ? api("/risks?kind=risk").catch(() => null) : Promise.resolve(null)]);
     S.counts.actions = a.actions.filter((x) => !["done", "dropped"].includes(x.status)).length;
     S.counts.meetings = m.length;
+    S.meetingIds = new Set(m.map((x) => x.id));
+    S.counts.risks = r ? r.count : 0;
     updateCounts();
   } catch { /* shown elsewhere */ }
 }
@@ -366,14 +388,17 @@ async function viewToday(el) {
   const p = me();
   el.innerHTML = `
     <div class="hero"><div><h2>${greeting()}, ${esc(p ? p.name.split(" ")[0] : "team")}</h2>
-      <p>${esc(new Date().toLocaleDateString(undefined, { weekday: "long", day: "numeric", month: "long" }))} · Sprint ${esc(S.health?.sprint ?? "")} · ${esc(S.team.name)}</p></div></div>
+      <p>${esc(new Date().toLocaleDateString(undefined, { weekday: "long", day: "numeric", month: "long" }))} · Sprint ${esc(S.health?.sprint ?? "")} · ${esc(S.team.name)}</p>
+      <p class="small" style="max-width:720px">SprintMind sits on top of the tools you already use. It connects what was promised in meetings, what
+        GitHub says actually happened, and what the team remembers in Hindsight, and flags delivery risks with the evidence behind them.</p></div></div>
+    <div id="riskCard"></div>
     <div id="banner"></div>
     <div class="stats" id="stats">${Array(4).fill(`<div class="card stat">${skel(2)}</div>`).join("")}</div>
     <div class="tiles">
       <a class="card tile" href="#/ask"><span class="ic">${icon("chat")}</span><div><b>Ask SprintMind</b><span>${p ? "Your priorities, blockers and SOPs" : "Anything about the sprint"}</span></div></a>
       <a class="card tile" href="#/meetings/new"><span class="ic">${icon("mic")}</span><div><b>Record a meeting</b><span>Transcribe it into action events</span></div></a>
-      <a class="card tile" href="#/radar"><span class="ic">${icon("radar")}</span><div><b>Sprint radar</b><span>Health, blockers, workload</span></div></a>
-      <a class="card tile" href="#/actions"><span class="ic">${icon("board")}</span><div><b>Action board</b><span>Move work through the sprint</span></div></a>
+      <a class="card tile" href="#/radar"><span class="ic">${icon("radar")}</span><div><b>Delivery radar</b><span>Commitments at risk, with evidence</span></div></a>
+      <a class="card tile" href="#/demo"><span class="ic">${icon("activity")}</span><div><b>Delivery demo</b><span>Commitment → CI failure → alert → fix</span></div></a>
     </div>
     <div class="cols">
       <section class="card"><div class="hd"><h2 class="grow">${p ? "My open actions" : "Blocked across the team"}</h2><a class="small" href="#/actions">Board →</a></div><div id="mine">${skel(4)}</div></section>
@@ -388,8 +413,8 @@ async function viewToday(el) {
   if (!sources.length) {
     $("#banner", el).innerHTML = `<div class="banner">${icon("sparkle")}<div class="grow"><b>Memory is empty</b>
       <span class="small">Load the Sprint 14 dataset (SOPs, planning, standups, an incident) so SprintMind has history to recall, or record your first meeting.</span></div>
-      <button class="btn primary" id="seedBtn">${icon("database")} Load Sprint 14 dataset</button><a class="btn" href="#/meetings/new">${icon("mic")} Record a meeting</a></div>`;
-    $("#seedBtn", el).onclick = (e) => seedDataset(e.currentTarget);
+      ${isManager() ? `<button class="btn primary" id="seedBtn">${icon("database")} Load Sprint 14 dataset</button>` : `<span class="small muted">A manager can load the dataset.</span>`}<a class="btn" href="#/meetings/new">${icon("mic")} Record a meeting</a></div>`;
+    $("#seedBtn", el)?.addEventListener("click", (e) => seedDataset(e.currentTarget));
   }
 
   const open = actions.filter((a) => !["done", "dropped"].includes(a.status));
@@ -409,7 +434,7 @@ async function viewToday(el) {
     <li class="click" data-action="${esc(a.id)}"><div class="grow"><div class="t">${a.ticket ? `<span class="ticket">${esc(a.ticket)}</span> ` : ""}${esc(a.title)}</div>
       <div class="s">${esc(a.meeting_title)}${p ? "" : ` · ${esc(a.owner || "unassigned")}`}</div></div>${dueHtml(a.due)}${statusPill(a.status)}</li>`).join("")}</ul>`
     : emptyBox("check", p ? "Nothing open for you" : "Nothing blocked", p ? "No action events are assigned to you yet." : "No blocked action events right now.");
-  $$("[data-action]", el).forEach((li) => li.onclick = () => openAction(actions.find((a) => a.id === li.dataset.action), rerender));
+  $$("[data-action]", el).forEach((li) => li.onclick = () => openItem(li.dataset.action, rerender));
 
   $("#recent", el).innerHTML = meetings.length ? `<ul class="list">${meetings.slice(0, 6).map((m) => `
     <li class="click" data-m="${esc(m.id)}"><div class="grow"><div class="t">${esc(m.title)}</div>
@@ -417,6 +442,16 @@ async function viewToday(el) {
       ${typePill(m.source_type)}</li>`).join("")}</ul>`
     : emptyBox("mic", "No meetings yet", "Record, upload or paste one to get action events.", `<a class="btn primary" href="#/meetings/new">${icon("mic")} New meeting</a>`);
   $$("[data-m]", el).forEach((li) => li.onclick = () => location.hash = `#/meetings/${encodeURIComponent(li.dataset.m)}`);
+
+  if (isManager()) {
+    api("/manager/dashboard").then((d) => {
+      const box = $("#riskCard", el);
+      if (!box || !d.risks.length) return;
+      box.innerHTML = `<section class="card mb"><div class="hd">${icon("alert")}<h2 class="grow">Delivery risks needing attention</h2><a class="small" href="#/radar">All ${d.risks.length} →</a></div>
+        <ul class="list">${d.risks.slice(0, 4).map((r) => `<li>${sevPill(r.severity)}<div class="grow"><div class="t">${esc(r.title)}</div>
+          <div class="s">${itemLink(r.item)} · ${esc(r.item.owner || "no owner")} · next: ${esc(r.recommended_action)}</div></div></li>`).join("")}</ul></section>`;
+    }).catch(() => {});
+  }
 }
 
 async function seedDataset(btn) {
@@ -498,7 +533,10 @@ function msgHtml(m, i) {
   if (m.error) return `<div class="msg bot err">${icon("alert")} ${esc(m.error)}</div>`;
   const r = m.res;
   return `<div class="msg bot" data-cites data-i="${i}"><div class="md">${md(r.answer)}</div>
-    <div class="foot">${memBlock(r.memories)}<span class="grow"></span>
+    <div class="foot">${memBlock(r.memories, `${r.state_count || 0} current-state entries + ${r.memory_count} memories`)}<span class="grow"></span>
+      ${r.citations ? (r.citations.has_citations ? `<span class="pill green" title="Every citation points at real evidence">${r.citations.cited.length} cited</span>`
+        : `<span class="pill amber" title="The answer cites no evidence; treat it with care">no citations</span>`) : ""}
+      ${r.citations && r.citations.invalid_removed.length ? `<span class="pill amber" title="Citations that pointed at no evidence were removed">${r.citations.invalid_removed.length} invalid removed</span>` : ""}
       <span class="small muted">${(r.latency_ms / 1000).toFixed(1)}s</span>
       <span class="fb">${m.feedback ? `<span class="small muted">${esc(m.feedback)}</span>` : `
         <button class="btn sm ghost icon" data-fb="up" title="Helpful" aria-label="Helpful">${icon("up")}</button>
@@ -568,8 +606,8 @@ function renderBriefing(body, r) {
 }
 
 // ============================================================== ACTION BOARD
-const LANES = ["todo", "in_progress", "blocked", "done", "dropped"];
-const LANE_COLOR = { todo: "var(--muted)", in_progress: "var(--accent)", blocked: "var(--red)", done: "var(--green)", dropped: "var(--line)" };
+const LANES = ["todo", "in_progress", "in_review", "blocked", "done", "dropped"];
+const LANE_COLOR = { todo: "var(--muted)", in_progress: "var(--accent)", in_review: "var(--violet)", blocked: "var(--red)", done: "var(--green)", dropped: "var(--line)" };
 
 async function viewActions(el) {
   el.innerHTML = `<div class="filters" id="filters"></div><div id="boardWrap">${skel(6)}</div>`;
@@ -586,12 +624,14 @@ async function viewActions(el) {
       ${S.person ? `<button data-owner="me" class="${f.owner === "me" ? "on" : ""}">Mine</button>` : ""}
     </div>
     <select id="fOwner" aria-label="Owner"><option value="">Any owner</option>${S.team.members.map((m) => `<option value="${m.id}">${esc(m.name)}</option>`).join("")}<option value="__none">Unassigned</option></select>
+    <select id="fKind" aria-label="Type"><option value="">Any type</option><option value="commitment">Commitments</option><option value="ticket">Tickets</option><option value="action">Meeting actions</option></select>
     <select id="fStage" aria-label="Scrum stage"><option value="">Any stage</option>${Object.keys(S.options.scrum_stages).map((s) => `<option value="${s}">${esc(nice(s))}</option>`).join("")}</select>
     <select id="fMeeting" aria-label="Meeting"><option value="">Any meeting</option>${meetings.map((m) => `<option value="${esc(m.id)}">${esc(m.title)} · ${esc(fmtDate(m.occurred_at))}</option>`).join("")}</select>
     <input id="fQ" type="search" placeholder="Search actions" aria-label="Search" value="${esc(f.q)}">
     <label class="check" style="margin:0"><input type="checkbox" id="fDropped" ${f.dropped ? "checked" : ""}> Show dropped</label>`;
   if (!["all", "me"].includes(f.owner)) $("#fOwner", el).value = f.owner;
-  $("#fStage", el).value = f.stage; $("#fMeeting", el).value = f.meeting;
+  $("#fStage", el).value = f.stage; $("#fMeeting", el).value = f.meeting; $("#fKind", el).value = f.kind || "";
+  $("#fKind", el).onchange = (e) => { f.kind = e.target.value; draw(); };
   $$("[data-owner]", el).forEach((b) => b.onclick = () => { f.owner = b.dataset.owner; viewActions(el); });
   $("#fOwner", el).onchange = (e) => { f.owner = e.target.value || "all"; viewActions(el); };
   $("#fStage", el).onchange = (e) => { f.stage = e.target.value; draw(); };
@@ -604,6 +644,7 @@ async function viewActions(el) {
     return all.filter((a) =>
       (f.owner === "all" || (f.owner === "me" ? a.owner_id === S.person : f.owner === "__none" ? !a.owner_id : a.owner_id === f.owner)) &&
       (!f.stage || a.scrum_stage === f.stage) && (!f.meeting || a.meeting_id === f.meeting) &&
+      (!f.kind || (f.kind === "commitment" ? a.kind === "commitment" : f.kind === "ticket" ? a.id.startsWith("tkt-") : a.kind !== "commitment" && !a.id.startsWith("tkt-"))) &&
       (!q || `${a.title} ${a.detail || ""} ${a.ticket || ""} ${a.owner || ""}`.toLowerCase().includes(q)));
   }
   function draw() {
@@ -624,17 +665,18 @@ async function viewActions(el) {
     <p class="small muted">Drag a card to change its status, or click it to edit. Every change is retained in Hindsight, so the radar and briefings pick it up.</p>`;
     wireBoard(wrap);
   }
-  const cardHtml = (a) => `<div class="acard" draggable="true" data-id="${esc(a.id)}" tabindex="0">
-    <div class="t">${a.ticket ? `<span class="ticket">${esc(a.ticket)}</span> ` : ""}${esc(a.title)}</div>
-    <div class="m">${avatar(a.owner, a.owner_id)}${stagePill(a.scrum_stage)}${a.customer ? `<span class="pill">${esc(a.customer)}</span>` : ""}<span class="grow"></span>${dueHtml(a.due)}</div>
-    <div class="from">${icon("mic")} ${esc(a.meeting_title)}</div></div>`;
+  const cardHtml = (a) => `<div class="acard ${a.risks.some((r) => r.kind === "risk" && r.severity === "high") ? "hot" : ""}" draggable="true" data-id="${esc(a.id)}" tabindex="0">
+    <div class="t">${a.kind === "commitment" ? `<span class="pill violet">commitment</span> ` : ""}${a.ticket ? `<span class="ticket">${esc(a.ticket)}</span> ` : ""}${esc(a.title)}</div>
+    <div class="m">${avatar(a.owner, a.owner_id)}${a.id.startsWith("tkt-") ? "" : stagePill(a.scrum_stage)}${a.customer_name ? `<span class="pill">${esc(a.customer_name)}</span>` : ""}<span class="grow"></span>${dueHtml(a.due)}</div>
+    ${engBadges(a) || riskBadges(a) ? `<div class="m">${riskBadges(a)}${engBadges(a)}</div>` : ""}
+    <div class="from">${icon(a.source?.source === "github" ? "activity" : "mic")} ${esc(a.meeting_title || "")}</div></div>`;
 
   function wireBoard(wrap) {
     $$(".acard", wrap).forEach((c) => {
       const a = all.find((x) => x.id === c.dataset.id);
       c.ondragstart = (e) => { e.dataTransfer.setData("text/plain", a.id); e.dataTransfer.effectAllowed = "move"; c.classList.add("dragging"); };
       c.ondragend = () => c.classList.remove("dragging");
-      c.onclick = () => openAction(a, () => viewActions(el));
+      c.onclick = () => openItem(a.id, () => viewActions(el));
       c.onkeydown = (e) => e.key === "Enter" && c.click();
     });
     $$(".lane", wrap).forEach((lane) => {
@@ -658,46 +700,88 @@ async function viewActions(el) {
   draw();
 }
 
-function openAction(a, onSaved) {
-  if (!a) return;
+const engBadges = (a) => {
+  const e = a.engineering || {}; const out = [];
+  if (e.ci) out.push(`<span class="pill ${e.ci.state === "failing" ? "red" : "green"}" title="${esc(e.ci.name || "")} · ${esc(fmtDateTime(e.ci.at))}">CI ${esc(e.ci.state)}</span>`);
+  for (const [n, pr] of Object.entries(e.prs || {})) if (pr.state) out.push(`<span class="pill ${pr.state === "merged" ? "green" : pr.state === "open" ? "teal" : ""}">PR #${esc(n)} ${esc(pr.state)}</span>`);
+  return out.join("");
+};
+const riskBadges = (a) => (a.risks || []).filter((r) => r.kind === "risk").slice(0, 2)
+  .map((r) => `<span class="pill ${SEV_TONE[r.severity]}" title="${esc(r.title)}">${esc(RULE_LABEL[r.rule] || r.rule)}</span>`).join("");
+
+async function openItem(id, onSaved) {
+  let it;
+  try { it = await api(`/items/${encodeURIComponent(id)}`); } catch (e) { return toast(e.message, true); }
+  const canEdit = isManager() || !it.owner_id || it.owner_id === S.person;
+  const hist = it.history.map((h) => `<li>${srcPill(h.source)} <b>${esc(h.field)}</b>: <span class="muted">${esc(h.old ?? "–")}</span> → <b>${esc(h.new)}</b>
+      ${h.applied ? "" : `<span class="pill amber">not applied</span>`} <span class="small muted">${esc(fmtDateTime(h.at))}${h.by ? " · " + esc(h.by) : ""}</span>
+      ${h.note ? `<div class="small muted">${esc(h.note)}</div>` : ""}</li>`).join("");
+  const eng = it.engineering || {};
   const m = modal(`
-    <div class="hd"><div class="grow"><div class="chips mb" style="margin-bottom:8px">${stagePill(a.scrum_stage)}<span class="pill">${esc(nice(a.kind))}</span>
-      ${a.customer ? `<span class="pill violet">${esc(a.customer)}</span>` : ""}${a.priority ? `<span class="pill amber">${esc(a.priority)}</span>` : ""}</div>
-      <h3>${a.ticket ? `<span class="ticket">${esc(a.ticket)}</span> ` : ""}${esc(a.title)}</h3>
-      ${a.detail ? `<p class="muted small" style="margin:6px 0 0">${esc(a.detail)}</p>` : ""}
-      ${a.blocked_on ? `<p class="small" style="margin:6px 0 0;color:var(--red)">Waiting on: ${esc(a.blocked_on)}</p>` : ""}</div>
+    <div class="hd"><div class="grow"><div class="chips" style="margin-bottom:8px">${it.kind === "commitment" ? `<span class="pill violet">customer commitment</span>` : it.id.startsWith("tkt-") ? `<span class="pill">ticket</span>` : `<span class="pill">${esc(nice(it.kind))}</span>`}
+      ${stagePill(it.scrum_stage)}${it.customer_name ? `<span class="pill violet">${esc(it.customer_name)}</span>` : ""}${it.priority ? `<span class="pill amber">${esc(it.priority)}</span>` : ""}${statusPill(it.status)}</div>
+      <h3>${it.ticket ? `<span class="ticket">${esc(it.ticket)}</span> ` : ""}${esc(it.title)}</h3>
+      ${it.ticket_inferred ? `<p class="small" style="margin:6px 0 0;color:var(--amber)">Linked to ${esc(it.ticket)} by keyword overlap. Confirm or change the ticket below.</p>` : ""}
+      ${it.detail ? `<p class="muted small" style="margin:6px 0 0">${esc(it.detail)}</p>` : ""}
+      <p class="small muted" style="margin:6px 0 0">From ${srcPill(it.source?.source || "")} ${esc(it.meeting_title || "")} · ${esc(fmtDateTime(it.meeting_at))} ${sourceLink(it.source)}${it.ticket_url ? ` · <a href="${esc(it.ticket_url)}" target="_blank" rel="noopener">tracker ↗</a>` : ""}</p></div>
       <button class="btn icon ghost" data-close aria-label="Close">${icon("x")}</button></div>
-    <form class="bd">
-      <div class="grid2">
-        <div><label class="f">Status</label><select name="status">${S.options.action_statuses.map((s) => `<option value="${s}" ${s === a.status ? "selected" : ""}>${esc(STATUS_LABEL[s] || s)}</option>`).join("")}</select></div>
-        <div><label class="f">Owner</label><select name="owner"><option value="">${a.owner && !a.owner_id ? esc(a.owner) + " (not on roster)" : "Unassigned"}</option>
-          ${S.team.members.map((p) => `<option value="${p.id}" ${p.id === a.owner_id ? "selected" : ""}>${esc(p.name)}</option>`).join("")}</select></div>
-      </div>
-      <label class="f">Due date</label><input type="date" name="due" value="${esc(a.due || "")}">
-      <label class="f">Update note <span class="muted" style="font-weight:400">(optional, retained with the change)</span></label>
-      <textarea name="note" rows="2" placeholder="e.g. Sandbox live, Acme confirmed they can test"></textarea>
-      <div class="row mt"><a class="small" href="#/meetings/${encodeURIComponent(a.meeting_id)}" data-close>${icon("mic")} ${esc(a.meeting_title || "Source meeting")}</a>
-        <span class="grow"></span><button type="button" class="btn" data-close>Cancel</button><button class="btn primary">Save</button></div>
-      <h4 class="mt small muted" style="text-transform:uppercase;letter-spacing:.05em">History</h4>
-      <ul class="timeline mt-s">${(a.history || []).slice().reverse().map((h) => `<li>${statusPill(h.status)} <span class="muted">${esc(relTime(h.at))} · ${esc(h.by || "")}</span>
-        ${h.note ? `<div>${esc(h.note)}</div>` : ""}</li>`).join("")}</ul>
-    </form>`);
-  $$("[data-close]", m.el).forEach((b) => b.addEventListener("click", m.close));
-  const form = $("form", m.el);
-  form.onsubmit = async (e) => {
+    <div class="bd">
+      ${it.risks.length ? `<div class="stack-s">${it.risks.map((r) => `<div class="row small">${sevPill(r.severity)} <b>${esc(r.title)}</b></div>`).join("")}</div>` : ""}
+      ${eng.ci || Object.keys(eng.prs || {}).length ? `<h4 class="mt small muted up">Engineering</h4><ul class="evid">
+        ${Object.entries(eng.prs || {}).map(([n, pr]) => `<li><span class="pill ${pr.state === "merged" ? "green" : "teal"}">PR #${esc(n)} ${esc(pr.state || "")}</span><span class="grow small">${esc(pr.branch || "")} · ${esc(fmtDateTime(pr.at))}</span>${pr.url ? `<a class="small" href="${esc(pr.url)}" target="_blank" rel="noopener">GitHub ↗</a>` : ""}</li>`).join("")}
+        ${eng.ci ? `<li><span class="pill ${eng.ci.state === "failing" ? "red" : "green"}">CI ${esc(eng.ci.state)}</span><span class="grow small">${esc(eng.ci.name || "")} · ${esc(fmtDateTime(eng.ci.at))}</span>${eng.ci.url ? `<a class="small" href="${esc(eng.ci.url)}" target="_blank" rel="noopener">run ↗</a>` : ""}</li>` : ""}</ul>` : ""}
+      <h4 class="mt small muted up">Dependencies</h4>
+      ${it.dependencies.length ? `<ul class="evid">${it.dependencies.map((d) => `<li><span class="pill ${d.status === "open" ? (d.kind === "approval" ? "amber" : "red") : "green"}">${esc(d.kind)} · ${esc(d.status)}</span>
+        <span class="grow small">${esc(d.description)}${d.party ? ` · ${esc(d.party)}` : ""}${d.resolution ? `<div class="muted">${esc(d.resolution)}</div>` : ""}</span>
+        ${d.status === "open" && canEdit && d.kind !== "item" ? `<button class="btn sm" data-resolve="${esc(d.id)}">${d.kind === "approval" ? "Record approval" : "Resolve"}</button>` : ""}</li>`).join("")}</ul>` : `<p class="small muted">None recorded</p>`}
+      ${canEdit ? `<form class="row mt-s" id="depForm"><input name="description" class="grow" maxlength="400" placeholder="Add: e.g. Acme sign-off on the enforcement date" required>
+        <select name="kind" style="width:auto"><option value="approval">approval</option><option value="external">external</option></select><button class="btn sm">Add</button></form>` : ""}
+      ${canEdit ? `<form id="editForm" class="mt">
+        <div class="grid2">
+          <div><label class="f">Status</label><select name="status">${S.options.action_statuses.map((x) => `<option value="${x}" ${x === it.status ? "selected" : ""}>${esc(STATUS_LABEL[x] || x)}</option>`).join("")}</select></div>
+          <div><label class="f">Owner</label><select name="owner"><option value="">${it.owner && !it.owner_id ? esc(it.owner) + " (not on roster)" : "Unassigned"}</option>
+            ${S.team.members.map((p) => `<option value="${p.id}" ${p.id === it.owner_id ? "selected" : ""}>${esc(p.name)}</option>`).join("")}</select></div>
+          <div><label class="f">Due date</label><input type="date" name="due" value="${esc(it.due || "")}"></div>
+          <div><label class="f">Ticket</label><input name="ticket" value="${esc(it.ticket || "")}" placeholder="NW-231" pattern="[A-Za-z][A-Za-z0-9]{1,9}-[0-9]{1,6}"></div>
+        </div>
+        <label class="f">Update note <span class="muted" style="font-weight:400">(optional, kept in history and retained in Hindsight)</span></label>
+        <textarea name="note" rows="2" maxlength="1000" placeholder="e.g. Sandbox live, Acme confirmed they can test"></textarea>
+        <div class="row mt"><span class="grow"></span><button type="button" class="btn" data-close>Cancel</button><button class="btn primary">Save</button></div>
+      </form>` : `<p class="small muted mt">Only ${esc(it.owner || "the owner")} or a manager can edit this item.</p>`}
+      <h4 class="mt small muted up">History <span style="text-transform:none;font-weight:400">(newest first; nothing is overwritten)</span></h4>
+      <ul class="timeline mt-s">${hist}</ul>
+      <h4 class="mt small muted up">Evidence trail</h4>
+      <ul class="evid">${(it.events || []).map((e) => `<li>${srcPill(e.source)}<span class="grow small">${esc(e.title)} <span class="muted">· ${esc(fmtDateTime(e.at))}</span></span>${sourceLink(e)}</li>`).join("")}</ul>
+    </div>`);
+  const done = () => { m.close(); refreshCounts(); onSaved && onSaved(); };
+  $$("[data-resolve]", m.el).forEach((b) => b.onclick = async () => {
+    const note = prompt("How was it resolved? (e.g. 'Lisa confirmed by email')");
+    if (note === null) return;
+    try { await api(`/dependencies/${encodeURIComponent(b.dataset.resolve)}/resolve`, { method: "POST", json: { note: note || null } }); toast("Recorded"); done(); }
+    catch (e) { toast(e.message, true); }
+  });
+  const dep = $("#depForm", m.el);
+  if (dep) dep.onsubmit = async (e) => {
+    e.preventDefault();
+    try { await api(`/items/${encodeURIComponent(it.id)}/dependencies`, { method: "POST", json: Object.fromEntries(new FormData(dep)) }); toast("Dependency recorded"); done(); }
+    catch (err) { toast(err.message, true); }
+  };
+  const form = $("#editForm", m.el);
+  if (form) form.onsubmit = async (e) => {
     e.preventDefault();
     const fd = new FormData(form);
-    const patch = { person_id: S.person || null };
-    if (fd.get("status") !== a.status) patch.status = fd.get("status");
-    if (fd.get("owner") && fd.get("owner") !== a.owner_id) patch.owner = fd.get("owner");
-    if (fd.get("due") && fd.get("due") !== a.due) patch.due = fd.get("due");
+    const patch = {};
+    if (fd.get("status") !== it.status) patch.status = fd.get("status");
+    if (fd.get("owner") && fd.get("owner") !== it.owner_id) patch.owner = fd.get("owner");
+    if (fd.get("due") && fd.get("due") !== it.due) patch.due = fd.get("due");
+    if (fd.get("ticket").trim() && fd.get("ticket").trim().toUpperCase() !== it.ticket) patch.ticket = fd.get("ticket").trim();
     if (fd.get("note").trim()) patch.note = fd.get("note").trim();
-    if (Object.keys(patch).length === 1) return m.close();
+    if (!Object.keys(patch).length) return m.close();
     await busy($("button.primary", form), "Saving", async () => {
       try {
-        await api(`/actions/${encodeURIComponent(a.id)}`, { method: "PATCH", json: patch });
-        toast("Saved and retained in Hindsight");
-        m.close(); refreshCounts(); onSaved && onSaved();
+        const r = await api(`/actions/${encodeURIComponent(it.id)}`, { method: "PATCH", json: patch });
+        const skipped = r.result?.skipped?.length ? ` (${r.result.skipped.length} change(s) not applied, see history)` : "";
+        toast(`Saved and retained in Hindsight${skipped}`); done();
       } catch (err) { toast(err.message, true); }
     });
   };
@@ -1003,31 +1087,111 @@ function drawMeter() {
   })();
 }
 
-// ===================================================================== RADAR
+// ============================================================ DELIVERY RADAR
+const RULE_LABEL = { overdue: "Overdue", ci_failing: "CI failing", pending_approval: "Pending approval", unresolved_blocker: "Blocker",
+  dependency_incomplete: "Dependency", deadline_at_risk: "Deadline", stale_progress: "Stale", conflicting_evidence: "Conflicting sources",
+  missing_owner: "No owner", missing_due: "No due date", missing_blocker_reason: "Blocker reason missing" };
+const SEV_TONE = { high: "red", medium: "amber", low: "blue", info: "" };
+const sevPill = (s) => `<span class="pill ${SEV_TONE[s] || ""}">${esc(s)}</span>`;
+const SRC_TONE = { github: "teal", meeting: "violet", standup: "blue", task_update: "blue", dashboard: "green", approval: "green", feedback: "amber", system: "" };
+const srcPill = (s) => `<span class="pill ${SRC_TONE[s] || ""}">${esc(nice(s))}</span>`;
+function sourceLink(ev) {
+  if (!ev) return "";
+  if (ev.url) return `<a class="small" href="${esc(ev.url)}" target="_blank" rel="noopener">${ev.url.includes("github.com") ? "GitHub ↗" : "open ↗"}</a>`;
+  if (ev.source_ref && S.meetingIds.has(ev.source_ref)) return `<a class="small" href="#/meetings/${encodeURIComponent(ev.source_ref)}">meeting →</a>`;
+  if (ev.source_ref && ["standup", "task_update", "meeting", "incident", "sop", "note", "retro"].includes(ev.source)) return `<a class="small" href="#/sources">source →</a>`;
+  return "";
+}
+const itemLink = (it) => !it || !it.id ? "" : `${it.ticket ? `<span class="ticket">${esc(it.ticket)}</span>${it.ticket_inferred ? ` <span class="pill" title="Linked to this ticket by keyword overlap; confirm or change it on the item">inferred link</span>` : ""} ` : ""}<a href="#" data-open-item="${esc(it.id)}">${esc(it.title)}</a>${it.ticket_url ? ` <a class="small" href="${esc(it.ticket_url)}" target="_blank" rel="noopener">tracker ↗</a>` : ""}`;
+const evidenceList = (evs) => evs && evs.length ? `<ul class="evid">${evs.map((e) => `<li>${srcPill(e.source)}<span class="grow"><span class="small muted">${esc(fmtDateTime(e.at))}</span> ${esc(e.title)}${e.why ? ` <span class="small muted">· ${esc(e.why)}</span>` : ""}</span>${sourceLink(e)}</li>`).join("")}</ul>` : `<span class="small muted">No evidence recorded</span>`;
+document.addEventListener("click", (e) => {
+  const a = e.target.closest("[data-open-item]");
+  if (a) { e.preventDefault(); openItem(a.dataset.openItem, () => route()); }
+});
+
+function riskCard(r) {
+  const it = r.item || {};
+  return `<div class="risk ${esc(r.severity)}" data-risk="${esc(r.id)}">
+    <div class="row">${sevPill(r.severity)}<span class="pill">${esc(RULE_LABEL[r.rule] || nice(r.rule))}</span>
+      <b class="grow">${esc(r.title)}</b><span class="small muted">since ${esc(relTime(r.first_detected_at))}</span></div>
+    <div class="row small mt-s">${it.kind === "commitment" ? `<span class="pill violet">commitment${it.customer_name ? " · " + esc(it.customer_name) : ""}</span>` : ""}
+      <span>${itemLink(it)}</span>${who(it.owner, it.owner_id)}${dueHtml(it.due)}${statusPill(it.status)}</div>
+    <p class="mt-s" style="margin-bottom:8px">${esc(r.explanation)}</p>
+    <details class="mem"><summary>${icon("file")} Evidence (${r.evidence.length} event${r.evidence.length === 1 ? "" : "s"})</summary>${evidenceList(r.evidence)}</details>
+    <div class="nextstep">${icon("sparkle")}<span><b>Next step:</b> ${esc(r.recommended_action)}</span></div>
+    ${r.kind === "risk" ? `<div class="row mt-s"><button class="btn sm" data-explain="${esc(r.id)}">${icon("chat")} Explain from evidence</button>
+      <span class="small muted">LLM summary of the verified evidence above, with citations</span></div>` : ""}
+    <div class="explain md" hidden></div></div>`;
+}
+function wireExplain(root) {
+  $$("[data-explain]", root).forEach((b) => b.onclick = () => busy(b, "Explaining", async () => {
+    const box = $(".explain", b.closest(".risk"));
+    try {
+      const r = await api(`/risks/${encodeURIComponent(b.dataset.explain)}/explain`, { method: "POST" });
+      box.innerHTML = `${md(r.explanation)}${(r.memories || []).length ? `<div class="small muted">[E#] = evidence events above · [M#] = memories recalled from Hindsight:</div>
+        <ol class="memlist">${r.memories.map((m, i) => `<li><span class="n">M${i + 1}</span><div class="txt">${esc(m.text)}</div></li>`).join("")}</ol>` : ""}`;
+    } catch (e) { box.innerHTML = `<p style="color:var(--red)">${esc(e.message)}</p>`; }
+    box.hidden = false;
+  }));
+}
+
 async function viewRadar(el) {
-  el.innerHTML = `<div class="row mb"><p class="muted grow" style="margin:0">Hindsight <code>reflect()</code> reasons over every standup, meeting and ticket update, then returns a structured report. Nobody writes a status update.</p>
-      <span class="small muted" id="ranAt"></span><button class="btn" id="runRadar">${icon("refresh")} Refresh</button></div>
-    <div id="radar"></div>
-    <section class="card mt" data-cites id="mgr"><div class="hd">${icon("chat")}<h2 class="grow">Ask about the team</h2><span class="small muted">answered with reflect()</span></div>
-      <div class="bd"><form class="row" id="mgrForm"><input class="grow" id="mgrQ" placeholder="e.g. Who is overloaded, and what could move to Sprint 15?" aria-label="Manager question">
+  if (managerGate(el, "The delivery radar")) return;
+  el.innerHTML = `<div class="row mb"><p class="muted grow" style="margin:0">Deterministic rules over commitments, GitHub activity, approvals and the latest
+      updates. Every alert links to the events that triggered it; the LLM only explains verified evidence.</p>
+      <span class="small muted" id="genAt"></span><button class="btn" id="recalc">${icon("refresh")} Re-evaluate</button></div>
+    <div id="dash">${skel(10)}</div>
+    <section class="card mt"><details id="narr"><summary class="hd">${icon("sparkle")}<h2 class="grow">Hindsight narrative</h2>
+      <span class="small muted">reflect() over all sprint memory, grounded in the state above</span></summary>
+      <div class="bd" id="narrBody"></div></details></section>
+    <section class="card mt" data-cites id="mgr"><div class="hd">${icon("chat")}<h2 class="grow">Ask about the team</h2><span class="small muted">answers cite current state and memories</span></div>
+      <div class="bd"><form class="row" id="mgrForm"><input class="grow" id="mgrQ" maxlength="2000" placeholder="e.g. Which Acme commitments could slip this week, and why?" aria-label="Manager question">
         <button class="btn primary">${icon("send")} Ask</button></form><div id="mgrAnswers"></div></div></section>`;
 
-  const box = $("#radar", el);
-  const run = async () => {
-    box.innerHTML = `<div class="card pad">${loadingNote("Hindsight is reflecting over the sprint's memory… this can take 10 to 30 seconds")}${skel(10)}</div>`;
-    try { S.cache.radar = { ...(await api("/manager/radar")), at: Date.now() }; }
-    catch (e) { box.innerHTML = `<div class="card">${errorBox(e)}</div>`; return; }
-    if (box.isConnected) renderRadar(box, S.cache.radar, $("#ranAt", el));
+  const load = async () => {
+    try {
+      const [d, meetings] = await Promise.all([api("/manager/dashboard"), api("/meetings").catch(() => [])]);
+      S.meetingIds = new Set(meetings.map((m) => m.id));
+      if (!el.isConnected) return;
+      renderDashboard($("#dash", el), d);
+      $("#genAt", el).textContent = `Updated ${relTime(d.generated_at)}`;
+      S.counts.risks = d.summary.open_risks; updateCounts();
+    } catch (e) { $("#dash", el).innerHTML = `<div class="card">${errorBox(e)}</div>`; }
   };
-  $("#runRadar", el).onclick = (e) => busy(e.currentTarget, "Reflecting", run);
-  if (S.cache.radar) renderRadar(box, S.cache.radar, $("#ranAt", el)); else busy($("#runRadar", el), "Reflecting", run);
+  $("#recalc", el).onclick = (e) => busy(e.currentTarget, "Evaluating", async () => {
+    try { const r = await api("/risks/recompute", { method: "POST" }); toast(`${r.changes.length} risk change(s)`); } catch (err) { toast(err.message, true); }
+    await load();
+  });
+  // Reload when the pipeline retains a GitHub event or a risk change (webhooks can arrive at any time).
+  let timer = null;
+  const onEvents = (evs) => {
+    if (!el.isConnected) return S.listeners.delete(onEvents);
+    if (evs.some((e) => e.status === "ok" && /^(github:|\d+ risk change|approval:)/.test(e.request?.label || ""))) {
+      clearTimeout(timer); timer = setTimeout(load, 400);
+    }
+  };
+  S.listeners.add(onEvents);
+
+  $("#narr", el).addEventListener("toggle", (e) => {
+    if (!e.target.open || $("#narrBody", el).dataset.loaded) return;
+    $("#narrBody", el).dataset.loaded = "1";
+    const box = $("#narrBody", el);
+    const run = async () => {
+      box.innerHTML = loadingNote("Hindsight is reflecting over the sprint's memory… 10 to 30 seconds") + skel(8);
+      try { S.cache.radar = { ...(await api("/manager/radar")), at: Date.now() }; }
+      catch (err) { box.innerHTML = errorBox(err); return; }
+      if (box.isConnected) { renderNarrative(box, S.cache.radar, null); box.insertAdjacentHTML("afterbegin", `<button class="btn sm mb" id="narrRe">${icon("refresh")} Regenerate</button>`); $("#narrRe", box).onclick = run; }
+    };
+    if (S.cache.radar) { renderNarrative(box, S.cache.radar, null); box.insertAdjacentHTML("afterbegin", `<button class="btn sm mb" id="narrRe">${icon("refresh")} Regenerate</button>`); $("#narrRe", box).onclick = run; }
+    else run();
+  });
 
   const answers = $("#mgrAnswers", el);
   const drawAnswers = () => {
     answers.innerHTML = S.cache.manager.slice().reverse().map((a) => `<div class="mt" data-cites style="border-top:1px solid var(--line-2);padding-top:14px">
       <div class="small muted" style="margin-bottom:6px"><strong>Q:</strong> ${esc(a.q)}</div>
-      ${a.pending ? loadingNote("Reflecting…") : a.error ? `<div style="color:var(--red)">${esc(a.error)}</div>` : `<div class="md">${md(a.res.answer)}</div>
-      <div class="mt-s">${memBlock(a.res.based_on, `Based on ${a.res.based_on.length} memories`)}</div>`}</div>`).join("");
+      ${a.pending ? loadingNote("Recalling memories and current state…") : a.error ? `<div style="color:var(--red)">${esc(a.error)}</div>` : `<div class="md">${md(a.res.answer)}</div>
+      <div class="mt-s">${memBlock(a.res.memories, `${a.res.state_count} current-state entries + ${a.res.memory_count} memories`)}</div>`}</div>`).join("");
   };
   drawAnswers();
   $("#mgrForm", el).onsubmit = async (e) => {
@@ -1038,9 +1202,87 @@ async function viewRadar(el) {
     try { item.res = await api("/manager/ask", { method: "POST", json: { question: q } }); } catch (err) { item.error = err.message; }
     item.pending = false; if (answers.isConnected) drawAnswers();
   };
+  await load();
 }
 
-function renderRadar(box, r, ranAt) {
+function renderDashboard(box, d) {
+  const sm = d.summary;
+  const stat = (n, l, cls = "", sub = "") => `<div class="card stat ${cls}"><div class="n">${n}</div><div class="l">${esc(l)}${sub ? ` <span class="muted">· ${esc(sub)}</span>` : ""}</div></div>`;
+  const byItem = (id) => d.risks.filter((r) => r.item_id === id);
+  const history = [
+    ...d.risk_history.map((e) => ({ at: e.at, html: `${sevPill(e.payload.severity)} <b>Risk ${esc(e.kind.split(".")[1])}</b> ${esc(e.title.replace(/^Risk \w+: /, ""))}` })),
+    ...d.change_history.map((h) => ({ at: h.at, html: `${srcPill(h.source)} ${h.item.id ? `<a href="#" data-open-item="${esc(h.item.id)}">${esc(h.item.ticket || h.item.title)}</a>` : ""}
+      ${esc(h.field)}: <span class="muted">${esc(h.old ?? "–")}</span> → <b>${esc(h.new)}</b>${h.by ? ` <span class="small muted">by ${esc(h.by)}</span>` : ""}
+      ${h.applied ? "" : `<span class="pill amber" title="${esc(h.note || "")}">not applied</span>`}` })),
+  ].sort((a, b) => b.at.localeCompare(a.at)).slice(0, 40);
+  const maxOpen = Math.max(1, ...d.workload.map((w) => w.open));
+  box.innerHTML = `
+    <div class="stats six">
+      ${stat(sm.open_risks, "open risks", sm.by_severity.high ? "red" : "", sm.by_severity.high ? `${sm.by_severity.high} high` : "")}
+      ${stat(`${sm.commitments_at_risk}/${sm.commitments_open}`, "commitments at risk", sm.commitments_at_risk ? "red" : "")}
+      ${stat(sm.pending_approvals, "pending approvals")}
+      ${stat(sm.ci_failing, "CI failing", sm.ci_failing ? "red" : "")}
+      ${stat(sm.blocked_items, "blocked items")}
+      ${stat(sm.missing_info, "missing information")}
+    </div>
+    <div class="section-title"><h2>Delivery risks</h2><span class="small muted">sorted by severity, then due date</span></div>
+    <div class="risklist">${d.risks.length ? d.risks.map(riskCard).join("")
+      : `<div class="card">${emptyBox("check", "No delivery risks right now", "Every rule was evaluated against the current ledger. Gaps in the record are listed under Missing information, not as risks.")}</div>`}</div>
+
+    <div class="cols mt">
+      <section class="card"><div class="hd">${icon("alert")}<h3 class="grow">Dependencies &amp; blockers</h3><span class="pill">${d.dependencies.length + d.blocked.filter((b) => !b.open_dependencies).length}</span></div>
+        ${d.dependencies.length || d.blocked.length ? `<ul class="list">
+          ${d.dependencies.map((x) => `<li><div class="grow"><div class="t"><span class="pill ${x.kind === "approval" ? "amber" : x.kind === "item" ? "violet" : ""}">${esc(x.kind)}</span> ${esc(x.description)}</div>
+            <div class="s">${itemLink(x.item)} · ${esc(x.item.owner || "no owner")} · open ${x.age_business_days} business day(s)${x.party ? ` · waiting on ${esc(x.party)}` : ""} ${sourceLink(x.opened_event)}</div></div>
+            ${x.kind !== "item" ? `<button class="btn sm" data-resolve="${esc(x.id)}" data-approval="${x.kind === "approval" ? 1 : ""}">${x.kind === "approval" ? "Record approval" : "Resolve"}</button>` : ""}</li>`).join("")}
+          ${d.blocked.filter((b) => !b.open_dependencies).map((b) => `<li><div class="grow"><div class="t">${statusPill("blocked")} ${itemLink(b)}</div><div class="s">${esc(b.blocked_on || "reason not recorded")}</div></div></li>`).join("")}
+        </ul>` : `<div class="empty small">No open dependencies or blocked items</div>`}</section>
+      <section class="card"><div class="hd">${icon("check")}<h3 class="grow">Approvals &amp; decisions</h3></div><div class="bd">
+        <h4 class="small muted" style="text-transform:uppercase;letter-spacing:.05em;margin-bottom:6px">Pending customer approvals</h4>
+        ${d.approvals.pending.length ? `<ul class="evid">${d.approvals.pending.map((x) => `<li><span class="pill amber">pending</span><span class="grow">${esc(x.party || "approver")}: ${esc(x.description)} <span class="small muted">· since ${esc(fmtDate(x.opened_at))} · ${itemLink(x.item)}</span></span></li>`).join("")}</ul>` : `<p class="small muted">None pending</p>`}
+        <h4 class="small muted mt" style="text-transform:uppercase;letter-spacing:.05em;margin-bottom:6px">Recorded approvals &amp; decisions (21 days)</h4>
+        ${d.approvals.granted.length || d.decisions.length ? `<ul class="evid">${[...d.approvals.granted.map((e) => ({ ...e, _k: "approved" })), ...d.decisions.map((e) => ({ ...e, _k: "decision" }))]
+          .sort((a, b) => b.at.localeCompare(a.at)).slice(0, 12).map((e) => `<li><span class="pill ${e._k === "approved" ? "green" : "violet"}">${e._k}</span><span class="grow">${esc(e.title)} <span class="small muted">· ${esc(fmtDate(e.at))}</span></span>${sourceLink(e)}</li>`).join("")}</ul>` : `<p class="small muted">None recorded</p>`}
+      </div></section>
+    </div>
+
+    <div class="cols mt">
+      <section class="card"><div class="hd">${icon("activity")}<h3 class="grow">Engineering activity</h3><span class="small muted">GitHub PRs and CI</span></div>
+        ${d.engineering.length ? `<ul class="list">${d.engineering.slice(0, 12).map((e) => `<li><span class="pill ${/ci_failed/.test(e.kind) ? "red" : /merged|ci_passed/.test(e.kind) ? "green" : "teal"}">${esc(e.kind.replace("github.", "").replace("_", " "))}</span>
+          <div class="grow"><div class="t" style="font-weight:500">${esc(e.title)}</div><div class="s">${esc(relTime(e.at))}${e.tickets.length ? " · " + e.tickets.map((t) => `<a href="#" data-open-item="tkt-${esc(t)}" class="ticket">${esc(t)}</a>`).join(" ") : " · <span style='color:var(--amber)'>no ticket linked</span>"}${e.payload.demo ? ` · <span class="pill">demo event</span>` : ""}</div></div>${sourceLink(e)}</li>`).join("")}</ul>`
+          : emptyBox("activity", "No GitHub events yet", "Point a GitHub webhook at /integrations/github/webhook, or run the Demo page's steps.")}</section>
+      <section class="card"><div class="hd">${icon("users")}<h3 class="grow">Open commitments</h3><span class="pill">${d.commitments.length}</span></div>
+        ${d.commitments.length ? `<ul class="list">${d.commitments.map((c) => `<li><div class="grow"><div class="t">${itemLink(c)}</div>
+          <div class="s">${esc(c.customer_name || "internal")} · ${esc(c.owner || "no owner")} ${dueHtml(c.due)}</div></div>
+          ${byItem(c.id).map((r) => sevPill(r.severity)).join("") || `<span class="pill green">on track</span>`}</li>`).join("")}</ul>` : `<div class="empty small">No open commitments</div>`}</section>
+    </div>
+
+    <div class="cols mt">
+      <section class="card"><div class="hd">${icon("users")}<h3 class="grow">Workload</h3><span class="small muted">from actual assignments in the ledger</span></div>
+        <div class="tbl-wrap"><table class="tbl"><thead><tr><th>Person</th><th>Open</th><th>Due ≤3d</th><th>Blocked</th><th>In review</th><th>High risks</th></tr></thead><tbody>
+        ${d.workload.map((w) => `<tr><td>${who(w.person, w.person_id)}</td><td><div class="row" style="gap:6px;flex-wrap:nowrap"><div class="track" style="width:60px;height:6px;background:var(--line-2);border-radius:99px;overflow:hidden"><div style="height:100%;width:${(w.open / maxOpen) * 100}%;background:var(--accent)"></div></div><b>${w.open}</b></div></td>
+          <td>${w.due_soon || ""}</td><td>${w.blocked ? `<span style="color:var(--red)">${w.blocked}</span>` : ""}</td><td>${w.in_review || ""}</td><td>${w.high_risks ? sevPill("high") + " " + w.high_risks : ""}</td></tr>`).join("")}
+        </tbody></table></div>${d.unassigned.length ? `<p class="small muted" style="padding:0 16px">${d.unassigned.length} open item(s) have no owner.</p>` : ""}</section>
+      <section class="card"><div class="hd">${icon("clock")}<h3 class="grow">Commitment &amp; risk history</h3></div>
+        ${history.length ? `<ul class="list hist">${history.map((h) => `<li><span class="small muted" style="white-space:nowrap">${esc(fmtDateTime(h.at))}</span><div class="grow small">${h.html}</div></li>`).join("")}</ul>` : `<div class="empty small">No changes yet</div>`}</section>
+    </div>
+
+    ${d.missing_info.length ? `<section class="card mt"><div class="hd">${icon("search")}<h3 class="grow">Missing information</h3><span class="small muted">gaps in the record, not risks; SprintMind never fills these in by guessing</span></div>
+      <ul class="list">${d.missing_info.map((r) => `<li><span class="pill">${esc(RULE_LABEL[r.rule] || r.rule)}</span><div class="grow"><div>${itemLink(r.item)}</div><div class="s">${esc(r.explanation)}</div></div><span class="small muted">${esc(r.recommended_action)}</span></li>`).join("")}</ul></section>` : ""}
+    ${d.conflicts.length ? `<section class="card mt"><div class="hd">${icon("split")}<h3>Conflicting sources</h3></div><ul class="list">${d.conflicts.map((c) => `<li><div class="grow small">
+      <a href="#" data-open-item="${esc(c.item_id)}">${esc(c.item_id.replace(/^tkt-/, ""))}</a> ${esc(c.field)}: ${srcPill(c.claimed_source)} says <b>${esc(c.claimed_value)}</b> (${esc(fmtDate(c.claimed_at))}); kept ${srcPill(c.current_source)} <b>${esc(c.current_value)}</b></div></li>`).join("")}</ul></section>` : ""}`;
+  wireExplain(box);
+  $$("[data-resolve]", box).forEach((b) => b.onclick = async () => {
+    const note = prompt(b.dataset.approval ? "Record the approval: who approved and how (e.g. 'Lisa confirmed by email')" : "How was it resolved?");
+    if (note === null) return;
+    await busy(b, "Saving", async () => {
+      try { await api(`/dependencies/${encodeURIComponent(b.dataset.resolve)}/resolve`, { method: "POST", json: { note: note || null } }); toast("Recorded and retained in Hindsight"); route(); }
+      catch (e) { toast(e.message, true); }
+    });
+  });
+}
+
+function renderNarrative(box, r, ranAt) {
   if (ranAt) ranAt.textContent = `Updated ${relTime(r.at)} · ${(r.latency_ms / 1000).toFixed(1)}s`;
   const rep = r.report;
   if (!rep) {
@@ -1194,6 +1436,12 @@ async function viewInspector(el) {
   $("#clearEv", live).onclick = async () => { await api("/inspector/events", { method: "DELETE" }).catch(() => {}); S.events = []; S.inflight.clear(); S.stats = null; drawLive(); };
   S.listeners.add(drawLive); drawLive();
 
+  if (!isManager()) {
+    for (const t of ["browse", "recall"]) managerGate($(`[data-p=${t}]`, el), "Raw memory access");
+    live.insertAdjacentHTML("beforeend", `<p class="small muted">As an employee you see that operations happen, not other people's queries or recalled memories.</p>`);
+    return;
+  }
+
   // browse
   const browse = $("[data-p=browse]", el);
   browse.innerHTML = `<form class="filters" id="bForm"><select name="type" aria-label="Memory type"><option value="">All types</option><option>world</option><option>experience</option><option>observation</option></select>
@@ -1229,8 +1477,83 @@ async function viewInspector(el) {
 }
 
 // ====================================================================== DEMO
-const DEMO_Q = "What were the key deliverables agreed with Acme Corp in yesterday's Teams sync, and who owns each one?";
+const DELIVERY_STEPS = [
+  { id: "commitment", title: "A commitment is made", text: "An Acme check-in runs through the meeting pipeline: Priya commits to the sandbox at 1,200 req/min in 2 business days (NW-231). A PR is opened on GitHub.", btn: "Record the commitment" },
+  { id: "ci_failure", title: "GitHub: CI fails", text: "A workflow_run failure on PR #488 goes through the webhook pipeline and is linked to NW-231 by branch name.", btn: "Send CI failure" },
+  { id: "alert", title: "Manager alert", text: "The rule engine opens a HIGH risk on the commitment with its evidence. The LLM explains it from that evidence only.", btn: "Explain the alert" },
+  { id: "fix", title: "Fix and merge", text: "CI passes and PR #488 is merged. The risk resolves on its own and NW-231 is done.", btn: "Send CI pass + merge" },
+  { id: "close", title: "Deliver", text: "Priya confirms the sandbox is live. The commitment closes, with its full history kept.", btn: "Close the commitment" },
+];
+
 async function viewDemo(el) {
+  el.innerHTML = `<section class="card mb"><div class="hd">${icon("activity")}<h2 class="grow">Delivery risk walkthrough</h2>
+      <span class="small muted">every step goes through the real pipelines: meeting → ledger → GitHub webhook → risk rules → Hindsight</span></div>
+      <div class="bd" id="walk"></div></section>
+    <div id="ba"></div>`;
+  viewBeforeAfter($("#ba", el));
+  const box = $("#walk", el);
+  if (!isManager()) {
+    const mgr = S.team.members.find((m) => m.access === "manager");
+    box.innerHTML = `<p class="muted" style="margin:0">Sending GitHub events and reading the risk dashboard needs a manager.
+      <button class="btn sm" id="sw">View as ${esc(mgr?.name || "a manager")}</button></p>`;
+    $("#sw", box).onclick = () => setPerson(mgr.id);
+    return;
+  }
+  const draw = async (extra = "") => {
+    let st, dash;
+    try { [st, dash] = await Promise.all([api("/demo/delivery"), api("/manager/dashboard")]); }
+    catch (e) { box.innerHTML = errorBox(e); return; }
+    const done = new Set(st.steps_done);
+    const c = st.commitment;
+    const risks = c ? dash.risks.filter((r) => r.item_id === c.id) : [];
+    const alertDone = done.has("ci_failure") && !!S.cache.demo.explained;
+    const isDone = (id) => id === "alert" ? alertDone || done.has("fix") : done.has(id);
+    const next = DELIVERY_STEPS.find((x) => !isDone(x.id))?.id;
+    box.innerHTML = `<div class="steps five">${DELIVERY_STEPS.map((x, i) => `<div class="card step ${isDone(x.id) ? "done" : ""} ${x.id === next ? "next" : ""}">
+        <div class="k">${isDone(x.id) ? "✓ " : ""}Step ${i + 1}</div><b>${esc(x.title)}</b><div class="small muted">${esc(x.text)}</div>
+        <button class="btn sm ${x.id === next ? "primary" : ""} mt-s" data-step="${x.id}" ${x.id !== next && !(x.id === "commitment") ? "disabled" : ""}>${esc(x.id === "commitment" && done.has("commitment") ? "Run again" : x.btn)}</button></div>`).join("")}</div>
+      ${c ? `<div class="cols">
+        <div><div class="section-title"><h2>The commitment, live from the ledger</h2></div>
+          <div class="card pad"><div class="row">${itemLink(c)} ${statusPill(c.status)}</div>
+            <div class="row small mt-s">${who(c.owner, c.owner_id)} · ${esc(c.customer_name || "")} ${dueHtml(c.due)}</div>
+            <p class="small muted" style="margin-bottom:0">Ticket ${esc(c.ticket || "")} engineering state: <span id="tktEng">…</span></p></div>
+          <div class="section-title mt"><h2>What the manager sees</h2><a class="small" href="#/radar">Open Delivery radar →</a></div>
+          ${risks.length ? risks.map(riskCard).join("") : `<div class="card pad">${done.has("commitment") ? `${icon("check")} No open risk on this commitment.` : ""}</div>`}
+        </div>
+        <div><div class="section-title"><h2>Evidence trail</h2><span class="small muted">newest first</span></div>
+          <div class="card"><ul class="list hist">${(await api(`/items/${encodeURIComponent(c.id)}`)).events.map((e) =>
+            `<li><span class="small muted" style="white-space:nowrap">${esc(fmtDateTime(e.at))}</span>${srcPill(e.source)}<div class="grow small">${esc(e.title)}</div>${sourceLink(e)}</li>`).join("")}</ul></div>
+        </div></div>` : `<p class="muted">Run step 1 to create the commitment.</p>`}${extra}`;
+    if (c && c.ticket) api(`/items/tkt-${encodeURIComponent(c.ticket)}`).then((t) => { const x = $("#tktEng", box); if (x) x.innerHTML = `${statusPill(t.status)} ${engBadges(t)}`; }).catch(() => {});
+    wireExplain(box);
+    $$("[data-step]", box).forEach((b) => b.onclick = () => busy(b, "Running", async () => {
+      const step = b.dataset.step;
+      try {
+        if (step === "alert") {
+          const r = risks[0];
+          if (!r) throw new Error("No open risk on the commitment. Run step 2 first.");
+          toggleDrawer(true);
+          const x = await api(`/risks/${encodeURIComponent(r.id)}/explain`, { method: "POST" });
+          S.cache.demo.explained = x.explanation;
+          await draw();
+          const card = $(`[data-risk="${r.id}"] .explain`, box);
+          if (card) { card.innerHTML = md(x.explanation); card.hidden = false; }
+          return;
+        }
+        toggleDrawer(true);
+        await api(`/demo/delivery/${step}`, { method: "POST" });
+        if (step === "commitment") S.cache.demo.explained = null;
+        refreshCounts();
+        await draw();
+      } catch (e) { toast(e.message, true); }
+    }));
+  };
+  box.innerHTML = skel(6);
+  await draw();
+}
+
+const DEMO_Q = "What were the key deliverables agreed with Acme Corp in yesterday's Teams sync, and who owns each one?";
+async function viewBeforeAfter(el) {
   const st = S.cache.demo;
   st.q ||= DEMO_Q;
   el.innerHTML = `
@@ -1263,7 +1586,7 @@ async function viewDemo(el) {
   $("#d1", el).onclick = (e) => busy(e.currentTarget, "Asking", async () => {
     loadInto("#dBefore", "Asking the LLM with no memory…");
     try { st.before = await api("/demo/baseline", { method: "POST", json: { question: q() } }); } catch (err) { toast(err.message, true); }
-    if (el.isConnected) viewDemo(el);
+    if (el.isConnected) viewBeforeAfter(el);
   });
   $("#d2", el).onclick = (e) => busy(e.currentTarget, "Retaining", async () => {
     toggleDrawer(true);
@@ -1273,18 +1596,18 @@ async function viewDemo(el) {
       S.cache.briefing = {}; S.cache.radar = null; refreshCounts();
       toast(`Retained: ${st.retained.facts_retained} facts, ${st.retained.actions.length} action events`);
     } catch (err) { toast(err.message, true); }
-    if (el.isConnected) viewDemo(el);
+    if (el.isConnected) viewBeforeAfter(el);
   });
   $("#d3", el).onclick = (e) => busy(e.currentTarget, "Recalling", async () => {
     loadInto("#dAfter", "Recalling memories from Hindsight…");
     try { st.after = await api("/employee/ask", { method: "POST", json: { question: q(), person_id: S.person || null } }); } catch (err) { toast(err.message, true); }
-    if (el.isConnected) viewDemo(el);
+    if (el.isConnected) viewBeforeAfter(el);
   });
   $("#dBoth", el).onclick = (e) => busy(e.currentTarget, "Comparing", async () => {
     loadInto("#dBefore", "Asking without memory…"); loadInto("#dAfter", "Recalling memories…");
     try { const r = await api("/demo/compare", { method: "POST", json: { question: q(), person_id: S.person || null } }); st.before = r.without_memory; st.after = r.with_memory; }
     catch (err) { toast(err.message, true); }
-    if (el.isConnected) viewDemo(el);
+    if (el.isConnected) viewBeforeAfter(el);
   });
 }
 
@@ -1301,6 +1624,8 @@ async function viewSettings(el) {
         ${row("Memory bank", h.bank_id || "")}
         ${row("LLM", h.llm?.configured ? h.llm.model : "not configured (set GROQ_API_KEY)", !!h.llm?.configured)}
         ${row("Transcriber", h.transcriber?.engine || h.transcriber?.error || "off", !!h.transcriber?.engine)}
+        ${row("GitHub webhook", h.github?.webhook_configured ? `configured · ${h.github.repo}` : "not configured (demo events still work)", !!h.github?.webhook_configured)}
+        ${row("Access control", h.auth_mode === "token" ? "token mode" : "demo mode (identity from “Viewing as”)")}
         ${row("Current sprint", h.sprint || "")}
         ${row("Team", `${S.team.name} · ${S.team.members.length} people`)}
       </ul></section>
@@ -1319,6 +1644,10 @@ async function viewSettings(el) {
   $("#reH", el).onclick = () => viewSettings(el);
   $("#theme", el).value = store.get("theme", "system");
   $("#theme", el).onchange = (e) => { store.set("theme", e.target.value); applyTheme(); };
+  if (!isManager()) {
+    ["#setupBtn", "#seedBtn2", "#resetBtn"].forEach((id) => { $(id, el).disabled = true; $(id, el).title = "Managers only"; });
+    $("#setupBtn", el).closest(".bd").insertAdjacentHTML("beforeend", `<p class="small muted mt">Switch “Viewing as” to a manager to use these.</p>`);
+  }
   $("#setupBtn", el).onclick = (e) => busy(e.currentTarget, "Configuring", async () => {
     try { const r = await api("/admin/setup", { method: "POST" }); toast(`Bank ready: ${(r.directives || []).length} directives, ${(r.mental_models || []).length} mental models`); }
     catch (err) { toast(err.message, true); }
@@ -1354,10 +1683,10 @@ async function loadHealth() {
 }
 function renderPersona() {
   const sel = $("#persona");
-  sel.innerHTML = `${S.team.members.map((m) => `<option value="${m.id}">${esc(m.name)}</option>`).join("")}<option value="">Whole team</option>`;
-  if (S.person && !member(S.person)) S.person = S.team.members[0]?.id || "";
+  sel.innerHTML = S.team.members.map((m) => `<option value="${m.id}">${esc(m.name)}${m.access === "manager" ? " (manager)" : ""}</option>`).join("");
+  if (!member(S.person)) S.person = S.team.members[0]?.id || "";
   sel.value = S.person;
-  sel.onchange = () => { S.person = sel.value; store.set("person", S.person); rerender(); };
+  sel.onchange = () => setPerson(sel.value);
 }
 
 async function boot() {

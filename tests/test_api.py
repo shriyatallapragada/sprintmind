@@ -22,6 +22,8 @@ class FakeLLM:
         self.calls.append(label)
         if label.startswith("baseline"):
             return "I don't have access to your meetings."
+        if label.startswith("explain"):
+            return "CI failed on the PR [E1] and the commitment is due soon [E2][E9].\nNext step: fix the check."
         return "NW-240 is blocked on Acme approval [1]."
 
     async def complete_json(self, system: str, user: str, *, label: str) -> dict[str, Any]:
@@ -32,7 +34,8 @@ class FakeLLM:
             items = []
             for ticket in sorted(set(re.findall(r"NW-\d+", user))):
                 owner = "Arjun Mehta" if ticket == "NW-240" else "Priya Raman"
-                status = "blocked" if ticket == "NW-240" and "BLOCKED" in user else "in_progress"
+                status = ("blocked" if ticket == "NW-240" and "BLOCKED" in user else
+                          "done" if f"{ticket} is done" in user else "in_progress")
                 items.append({"kind": "status_update", "ticket": ticket, "title": f"work on {ticket}",
                               "owner": owner, "status": status, "blocked_on": "Acme approval" if status == "blocked" else None,
                               "detail": f"{ticket} update"})
@@ -58,6 +61,11 @@ class FakeLLM:
                 "customer_commitments": [], "workload": []}
 
 
+MANAGER = {"X-SprintMind-User": "neha"}
+PRIYA = {"X-SprintMind-User": "priya"}
+ARJUN = {"X-SprintMind-User": "arjun"}
+
+
 class FakeTranscriber:
     engine = "groq-whisper"
 
@@ -77,10 +85,10 @@ class FakeTranscriber:
 def ctx(tmp_path):
     settings = Settings(memory_backend="local", registry_file=str(tmp_path / "reg.json"), team_file="data/team.json",
                         groq_api_key=None, hindsight_api_key=None, meetings_dir=str(tmp_path / "meetings"),
-                        max_audio_mb=0.001)
+                        max_audio_mb=0.001, ledger_path=":memory:")
     llm = FakeLLM()
     services = build_services(settings, store=LocalStore(), llm=llm, transcriber=FakeTranscriber())
-    with TestClient(create_app(services)) as client:
+    with TestClient(create_app(services), headers=MANAGER) as client:
         yield client, services, llm
 
 
@@ -105,8 +113,8 @@ def test_ingest_retains_raw_and_tagged_facts(ctx):
     body = _ingest(client)
     assert body["facts_retained"] == 2
     assert set(body["people"]) == {"arjun", "priya"}
-    bank = services.memory.store.banks[services.memory.bank_id]
-    assert len(bank) == 3  # 1 raw document + 2 facts
+    bank = [m for m in services.memory.store.banks[services.memory.bank_id] if "source:risk" not in m["tags"]]
+    assert len(bank) == 3  # 1 raw document + 2 facts (risk transitions are retained separately)
     blocked = [m for m in bank if "status:blocked" in m["tags"]]
     assert blocked and "person:arjun" in blocked[0]["tags"] and "ticket:NW-240" in blocked[0]["tags"]
     assert client.get("/sources").json()[0]["facts_retained"] == 2
@@ -116,7 +124,9 @@ def test_reingest_same_document_is_idempotent(ctx):
     client, services, _ = ctx
     _ingest(client)
     _ingest(client)
-    assert len(services.memory.store.banks[services.memory.bank_id]) == 3
+    docs = [m for m in services.memory.store.banks[services.memory.bank_id] if "source:risk" not in m["tags"]]
+    assert len(docs) == 3
+    assert len(services.delivery.ledger.events(kind_prefix="statement.")) == 2  # duplicate statements are not re-applied
 
 
 def test_extraction_failure_still_retains_raw(ctx):
@@ -197,8 +207,9 @@ def test_sop_ask_scoped_to_sops(ctx):
 
 
 def test_llm_missing_returns_503(tmp_path):
-    settings = Settings(memory_backend="local", registry_file=str(tmp_path / "r.json"), groq_api_key=None)
-    with TestClient(create_app(build_services(settings, store=LocalStore()))) as client:
+    settings = Settings(memory_backend="local", registry_file=str(tmp_path / "r.json"), groq_api_key=None,
+                        ledger_path=":memory:")
+    with TestClient(create_app(build_services(settings, store=LocalStore())), headers=MANAGER) as client:
         assert client.post("/demo/baseline", json={"question": "hello"}).status_code == 503
 
 
@@ -252,10 +263,10 @@ def test_record_meeting_creates_scrum_actions_and_memories(ctx):
     assert len(facts) == 4
     sandbox = next(x for x in facts if "sandbox" in x["text"])
     assert {"scrum:sprint_review", "person:priya", "customer:acme", "ticket:NW-231"} <= set(sandbox["tags"])
-    assert sandbox["metadata"]["action_id"] == actions["Set up Acme sandbox at 1,200 req/min"]["id"]
+    assert sandbox["metadata"]["item_id"] == actions["Set up Acme sandbox at 1,200 req/min"]["id"]
 
     retains = [e for e in client.get("/inspector/events?op=retain").json()["events"] if e["status"] == "ok"]
-    assert [e["request"]["document_id"] for e in retains] == [m["id"], f"{m['id']}::facts"]
+    assert [e["request"]["document_id"] for e in retains if e["request"]["document_id"]] == [m["id"], f"{m['id']}::facts"]
     assert "Priya Raman" in services.meetings.transcriber.prompts[0]  # Whisper is primed with the roster
 
 
@@ -263,22 +274,26 @@ def test_action_status_update_is_retained(ctx):
     client, services, _ = ctx
     m = _record(client).json()
     action = next(a for a in m["actions"] if a["owner_id"] == "priya")
-    r = client.patch(f"/actions/{action['id']}", json={"status": "done", "note": "sandbox live", "person_id": "priya"})
+    assert client.patch(f"/actions/{action['id']}", json={"status": "done"}, headers=ARJUN).status_code == 403
+    r = client.patch(f"/actions/{action['id']}", json={"status": "done", "note": "sandbox live"}, headers=PRIYA)
     assert r.status_code == 200, r.text
     assert r.json()["action"]["status"] == "done"
-    assert "status: done" in r.json()["memory"] and "sandbox live" in r.json()["memory"]
-    update = [x for x in services.memory.store.banks[services.memory.bank_id] if f"action:{action['id']}" in x["tags"]]
-    assert update and "person:priya" in update[0]["tags"] and "source:task_update" in update[0]["tags"]
+    assert "status done" in r.json()["memory"] and "sandbox live" in r.json()["memory"]
+    update = [x for x in services.memory.store.banks[services.memory.bank_id]
+              if f"item:{action['id']}" in x["tags"] and "source:task_update" in x["tags"]]
+    assert update and "person:priya" in update[0]["tags"]
 
     saved = client.get(f"/meetings/{m['id']}").json()
-    history = next(a for a in saved["actions"] if a["id"] == action["id"])["history"]
-    assert [h["status"] for h in history] == ["todo", "done"] and history[-1]["by"] == "Priya Raman"
+    assert next(a for a in saved["actions"] if a["id"] == action["id"])["status"] == "done"
+    history = [h for h in client.get(f"/items/{action['id']}").json()["history"] if h["field"] == "status" and h["applied"]]
+    assert [h["new"] for h in history] == ["done", "todo"] and history[0]["by"] == "Priya Raman"
 
     assert client.get("/actions", params={"status": "done"}).json()["count"] == 1
     assert client.get("/actions", params={"owner": "arjun", "stage": "impediment"}).json()["count"] == 1
     assert client.patch(f"/actions/{action['id']}", json={"status": "nope"}).status_code == 422
     assert client.patch("/actions/missing-01", json={"status": "done"}).status_code == 404
     assert client.patch(f"/actions/{action['id']}", json={"owner": "ghost"}).status_code == 422
+    assert client.patch(f"/actions/{action['id']}", json={"due": "next friday"}).status_code == 422
 
 
 def test_pasted_transcript_meeting_and_listing(ctx):
@@ -301,10 +316,10 @@ def test_audio_too_large_and_empty(ctx):
 
 def test_meeting_without_transcriber_returns_503(tmp_path):
     settings = Settings(memory_backend="local", registry_file=str(tmp_path / "r.json"), groq_api_key=None,
-                        meetings_dir=str(tmp_path / "m"))
+                        meetings_dir=str(tmp_path / "m"), ledger_path=":memory:")
     services = build_services(settings, store=LocalStore(), llm=FakeLLM())
     assert services.meetings.transcriber is None and "GROQ_API_KEY" in services.transcriber_error
-    with TestClient(create_app(services)) as client:
+    with TestClient(create_app(services), headers=MANAGER) as client:
         assert _record(client).status_code == 503
         assert client.get("/health").json()["transcriber"]["engine"] is None
 
