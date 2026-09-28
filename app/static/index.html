@@ -1,0 +1,55 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>SprintMind</title>
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><rect width='32' height='32' rx='8' fill='%233056e8'/><text x='16' y='22' font-size='17' font-family='system-ui' font-weight='800' fill='white' text-anchor='middle'>S</text></svg>">
+<link rel="stylesheet" href="/static/app.css">
+</head>
+<body>
+<div class="app">
+  <aside class="sidebar" id="sidebar">
+    <div class="brand">
+      <div class="logo">S</div>
+      <div><b>SprintMind</b><small id="teamName">Scrum memory copilot</small></div>
+    </div>
+    <nav class="nav" id="nav" aria-label="Main"></nav>
+    <div class="foot">
+      <div><span class="dot" id="memDot"></span><span id="memTxt">Memory…</span></div>
+      <div><span class="dot" id="llmDot"></span><span id="llmTxt">LLM…</span></div>
+    </div>
+  </aside>
+  <div class="scrim" id="scrim"></div>
+
+  <div class="main">
+    <header class="topbar">
+      <button class="btn icon ghost menu-btn" id="menuBtn" aria-label="Open menu"></button>
+      <div class="grow">
+        <h1 id="pageTitle">SprintMind</h1>
+        <div class="sub" id="pageSub"></div>
+      </div>
+      <label class="persona"><span class="lbl">Viewing as</span>
+        <select id="persona" aria-label="Viewing as"></select>
+      </label>
+      <button class="btn sm pulse" id="pulseBtn" title="Live memory activity">
+        <span class="led"></span><span class="txt" id="pulseTxt">Memory idle</span>
+      </button>
+    </header>
+    <main class="view" id="view"></main>
+  </div>
+</div>
+
+<aside class="drawer" id="drawer" aria-label="Live memory activity">
+  <header>
+    <h3 class="grow">Live memory activity</h3>
+    <a class="btn sm ghost" href="#/inspector">Open inspector</a>
+    <button class="btn icon ghost" id="drawerClose" aria-label="Close"></button>
+  </header>
+  <div class="body" id="drawerBody"></div>
+</aside>
+
+<div class="toasts" id="toasts" aria-live="polite"></div>
+<script src="/static/app.js"></script>
+</body>
+</html>

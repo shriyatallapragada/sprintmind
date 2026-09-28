@@ -1,0 +1,16 @@
+{
+  "team": "Northwind Platform Team",
+  "members": [
+    {"id": "neha", "name": "Neha Kulkarni", "role": "Engineering Manager / Scrum Master", "aliases": ["NK"]},
+    {"id": "vikram", "name": "Vikram Rao", "role": "Tech Lead", "aliases": ["VR"]},
+    {"id": "priya", "name": "Priya Raman", "role": "Backend Engineer (API platform)", "aliases": ["PR", "P. Raman"]},
+    {"id": "rahul", "name": "Rahul Verma", "role": "Backend Engineer (Identity & Integrations)", "aliases": ["RV"]},
+    {"id": "arjun", "name": "Arjun Mehta", "role": "DevOps / Database Engineer", "aliases": ["AM"]},
+    {"id": "sara", "name": "Sara Kim", "role": "Frontend Engineer", "aliases": ["SK"]},
+    {"id": "daniel", "name": "Daniel Okafor", "role": "QA Automation Engineer", "aliases": ["Dan", "DO"]}
+  ],
+  "customers": [
+    {"id": "acme", "name": "Acme Corp", "aliases": ["Acme", "ACME", "Acme Logistics"],
+     "contacts": ["Tom Becker (VP Engineering)", "Lisa Moreno (Integration Lead)"]}
+  ]
+}

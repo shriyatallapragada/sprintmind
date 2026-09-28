@@ -1,0 +1,22 @@
+{
+  "_comment": "Seed timeline. business_days_ago is relative to the day you run the seed script, so 'yesterday' and 'last week' stay true during a live demo.",
+  "documents": [
+    {"file": "sops/hotfix_release_sop.md", "source_type": "sop", "title": "SOP-004 Hotfix Release Procedure", "business_days_ago": 60},
+    {"file": "sops/db_migration_sop.md", "source_type": "sop", "title": "SOP-007 Production Database Migration", "business_days_ago": 60},
+    {"file": "sops/pr_review_sop.md", "source_type": "sop", "title": "SOP-002 Pull Request & Code Review Standard", "business_days_ago": 60},
+    {"file": "incident_inc0917_postmortem.md", "source_type": "incident", "title": "INC-0917 Postmortem: API gateway 503s during Acme bulk import", "business_days_ago": 16, "customer": "Acme Corp"},
+    {"file": "sprint14_planning.md", "source_type": "meeting", "title": "Sprint 14 Planning", "business_days_ago": 10,
+     "participants": ["Neha Kulkarni", "Vikram Rao", "Priya Raman", "Rahul Verma", "Arjun Mehta", "Sara Kim", "Daniel Okafor"]},
+    {"file": "standup_d9.md", "source_type": "standup", "title": "Daily Standup", "business_days_ago": 9},
+    {"file": "standup_d7.md", "source_type": "standup", "title": "Daily Standup", "business_days_ago": 7},
+    {"file": "standup_d5.md", "source_type": "standup", "title": "Daily Standup", "business_days_ago": 5},
+    {"file": "jira_updates_d4.md", "source_type": "task_update", "title": "Jira activity digest NW board", "business_days_ago": 4},
+    {"file": "standup_d3.md", "source_type": "standup", "title": "Daily Standup", "business_days_ago": 3},
+    {"file": "standup_d2.md", "source_type": "standup", "title": "Daily Standup", "business_days_ago": 2},
+    {"file": "standup_d1.md", "source_type": "standup", "title": "Daily Standup", "business_days_ago": 1}
+  ],
+  "demo": [
+    {"file": "../demo/acme_teams_sync.md", "source_type": "meeting", "title": "Acme Corp weekly sync (MS Teams)", "business_days_ago": 1, "customer": "Acme Corp",
+     "participants": ["Neha Kulkarni", "Vikram Rao", "Priya Raman", "Rahul Verma", "Arjun Mehta", "Sara Kim"]}
+  ]
+}
